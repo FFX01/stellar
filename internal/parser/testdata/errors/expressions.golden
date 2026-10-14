@@ -1,0 +1,5 @@
+2:25: comparisons cannot be chained; use 'and'
+3:13: unexpected '!'; use 'not' for logical negation
+4:28: expected |, found newline
+6:15: expected =>, found ->
+9:13: unexpected character '$'

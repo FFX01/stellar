@@ -1,0 +1,9 @@
+2
+4
+8
+16
+32
+64
+panic: integer overflow
+    at grow (2:14)
+    at main (8:13)

@@ -1,0 +1,6 @@
+1:1: expected declaration (fn, type or impl), found let
+3:1: impl blocks cannot be pub
+6:11: expected object, interface or enum, found identifier "struct"
+10:5: interface methods take the interface's visibility; remove pub
+15:14: expected :, found identifier "float64"
+22:1: imports must come before declarations

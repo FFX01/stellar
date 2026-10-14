@@ -1,0 +1,4 @@
+3:11: expected = and an initial value, found identifier "int32"
+6:5: expected expression, found var
+8:5: cannot assign to this expression
+9:21: expected {, found identifier "c"

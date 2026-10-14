@@ -1,0 +1,5 @@
+1:6: type name book must be PascalCase
+2:6: type name Snake_Case must be PascalCase
+5:18: object literal must not have a space before {; write Book{
+6:12: done{ is not an object literal because type names are PascalCase; add a space before { to start a block
+9:26: Red{ must be followed by field: value; add a space before { to start a block

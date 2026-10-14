@@ -1,0 +1,17 @@
+circle r=1.0 area 3.0
+rect 2.0x3.0 area 6.0
+empty area 0.0
+item lamp
+  an item named lamp
+number 7
+empty
+item via function value
+item bound
+count 2
+ok 42
+missing key missing
+other error: empty key
+outer: inner: not found: k
+cause: inner: not found: k
+root is NotFound(k)
+same enum: true

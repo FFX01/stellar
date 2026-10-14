@@ -1,0 +1,43 @@
+pub fn rename(b: mut Book, t: str) {
+    b.title = t
+}
+
+fn main() {
+    var b = Book{ title: "Dune", author: a, isbn: "1" }
+    rename(mut b, "New Title")
+    mut b.retitle("Other")
+    b.author.firstName = "F."
+    rename(mut shelf.books[0], "x")
+    mut shelf.books[0].retitle("y")
+    let label = b.label()
+    var count: int32 = 0
+    count = count + 1
+    var best = try books[0]
+    for candidate in books {
+        if candidate.rating > best.rating {
+            best = candidate
+        }
+    }
+    let inc = fn() {
+        count = count + 1
+    }
+    inc()
+    times(3, inc)
+    let double = fn(x: int32) -> int32 {
+        return x * 2
+    }
+    let empty = fn() {}
+    var xs: []int32 = [1, 2, 3]
+    xs[0] = 10
+    push(mut xs, 4)
+    var ages: Map[str, int32] = ["ann": 31, "bob": 42]
+    ages["cy"] = 27
+    let none: Map[str, int32] = [:]
+    let grid: Map[str, []int32] = ["a": [1, 2], "b": []]
+}
+
+pub fn times(n: int32, f: fn()) {
+    for i in 0..n {
+        f()
+    }
+}
