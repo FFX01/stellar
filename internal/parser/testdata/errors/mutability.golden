@@ -1,3 +1,0 @@
-2:12: mut is only allowed on function parameters; use var for a variable that changes
-3:15: mut fn no longer exists; closures are plain fn
-8:12: mut is only allowed on function parameters; use var for a variable that changes

@@ -1,4 +1,0 @@
-int16 300
-panic: division by zero
-    at divide (2:14)
-    at main (10:15)
