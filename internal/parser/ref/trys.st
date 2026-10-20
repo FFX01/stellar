@@ -1,0 +1,22 @@
+var a = try a();
+var a = try a else b;
+var a = try f() else { var b = 1 + 2; >> b; };
+var a = try f() else |e| {
+    log.error(e);
+    >> 1+ 2;
+};
+var a = try f() else b;
+
+fn main() -> int {
+    try a else {
+        return 1;
+    }
+}
+
+try f();
+try f() else { return 1; }
+
+fn main() {
+    var a = try f() else |e| { log.error(e); >> 1 + 2; };
+    var a = try f() else a;
+}

@@ -1,0 +1,29 @@
+(my_var_one + my_var_two)
+[var_one, var_two, var_three]
+
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+var my_var_3 = 1
+
+var float_test = 1.5
+
+type Item object {
+    name: str
+    age: int
+}
+impl Stringable for Item {
+    fn toString(self) -> str {
+        return self.name
+    }
+}
+impl Item {
+    fn rename(*self, name: str) {
+        self.name = name
+    }
+}
+
+if a == b {
+    c
+}
