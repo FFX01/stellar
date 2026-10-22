@@ -13,5 +13,17 @@ fn main() {
         "world" => {
             >> try list[0];
         }
-    };
+    }
+    return switch try args[0] {
+        "add" => {
+            var title = try args[1] else {
+                return Err("you need to provide a title");
+            };
+            >> Ok(Action.Add(title=title));
+        }
+        "list" => Ok(Action.List),
+        "exit" => Ok(Action.Exit),
+        None => Err("Command missing"),
+        _ => Err("invalid command"),
+    }
 }

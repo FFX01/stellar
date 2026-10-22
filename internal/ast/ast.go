@@ -160,6 +160,42 @@ func (b *BoolLiteralExpr) String() string {
 	return fmt.Sprintf("BoolLiteralExpr (%v)", b.Value)
 }
 
+type ForInExpr struct {
+	Token        lexer.Token
+	IndexBinding lexer.Token
+	ValueBinding lexer.Token
+	Container    Expression
+	Body         Expression
+}
+
+func (f *ForInExpr) TokenLiteral() string { return f.Token.Literal }
+func (f *ForInExpr) expr()                {}
+func (f *ForInExpr) String() string {
+	return fmt.Sprintf(
+		"ForInExpr(%s, %s, %s, %s)",
+		f.IndexBinding.Literal,
+		f.ValueBinding.Literal,
+		pointerToString(f.Container),
+		pointerToString(f.Body),
+	)
+}
+
+type ForWhileExpr struct {
+	Token     lexer.Token
+	Condition Expression
+	Body      Expression
+}
+
+func (f *ForWhileExpr) TokenLiteral() string { return f.Token.Literal }
+func (f *ForWhileExpr) expr()                {}
+func (f *ForWhileExpr) String() string {
+	return fmt.Sprintf(
+		"ForWhileExpr(%s, %s)",
+		pointerToString(f.Condition),
+		pointerToString(f.Body),
+	)
+}
+
 type IntegerLiteralExpr struct {
 	Token lexer.Token
 	Value int64
@@ -258,6 +294,38 @@ func (s *SwitchExpr) String() string {
 	)
 }
 
+type NewExpr struct {
+	Token lexer.Token
+	Type  Type
+}
+
+func (n *NewExpr) TokenLiteral() string { return n.Token.Literal }
+func (n *NewExpr) expr()                {}
+func (n *NewExpr) String() string {
+	return fmt.Sprintf(
+		"NewExpr(%s)",
+		pointerToString(n.Type),
+	)
+}
+
+type IfExpr struct {
+	Token     lexer.Token
+	Condition Expression
+	Then      Expression
+	Else      Expression
+}
+
+func (i *IfExpr) TokenLiteral() string { return i.Token.Literal }
+func (i *IfExpr) expr()                {}
+func (i *IfExpr) String() string {
+	return fmt.Sprintf(
+		"IfExpr(%s, %s, %s)",
+		pointerToString(i.Condition),
+		pointerToString(i.Then),
+		pointerToString(i.Else),
+	)
+}
+
 type SubscriptExpr struct {
 	Token    lexer.Token
 	Receiver Expression
@@ -309,8 +377,37 @@ func (p *PointerType) String() string {
 	return fmt.Sprintf("PointerType (%s)", pointerToString(p.ElementType))
 }
 
+type NotExpr struct {
+	Token lexer.Token
+	Value Expression
+}
+
+func (n *NotExpr) TokenLiteral() string { return n.Token.Literal }
+func (n *NotExpr) expr()                {}
+func (n *NotExpr) String() string {
+	return fmt.Sprintf(
+		"NotExpr(%s)",
+		pointerToString(n.Value),
+	)
+}
+
+type NegativeExpr struct {
+	Token lexer.Token
+	Value Expression
+}
+
+func (n *NegativeExpr) TokenLiteral() string { return n.Token.Literal }
+func (n *NegativeExpr) expr()                {}
+func (n *NegativeExpr) String() string {
+	return fmt.Sprintf(
+		"NegativeExpr(%s)",
+		pointerToString(n.Value),
+	)
+}
+
 type NamedType struct {
 	Token lexer.Token
+	Path  []string
 	Name  string
 	Args  []Type
 }
@@ -319,7 +416,8 @@ func (n *NamedType) TokenLiteral() string { return n.Token.Literal }
 func (n *NamedType) typ()                 {}
 func (n *NamedType) String() string {
 	return fmt.Sprintf(
-		"NamedType (%s, %s)",
+		"NamedType ([%s], %s, %s)",
+		strings.Join(n.Path, ", "),
 		n.Name,
 		sliceToString(n.Args),
 	)

@@ -31,7 +31,7 @@ pub type Store[Tkey, Tvalue] object {
 }
 
 impl String for Store {
-    fn string(self: Store) -> str {
+    pub fn string(self: Store) -> str {
         return self.key + ": " + self.value;
     }
     fn write(self: Store, s: str) {
@@ -40,4 +40,12 @@ impl String for Store {
         self.v = try cut[1] else self.v; // need to implement index access infix
         self.k = "a";
     }
+}
+
+type UserId = int;
+type Handler[T] = fn(e: Event) -> T;
+type Alias = io.http.Reader[io.http.Request];
+type Status enum {
+    InProgress,
+    Done,
 }

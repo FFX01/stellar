@@ -24,9 +24,13 @@ const (
 	EQ           T_Token = "EQ"
 	NEQ          T_Token = "NEQ"
 	PLUS         T_Token = "PLUS"
+	PLUS_ASSIGN  T_Token = "PLUS_ASSIGN"
 	MINUS        T_Token = "MINUS"
+	MINUS_ASSIGN T_Token = "MINUS_ASSIGN"
 	DIV          T_Token = "DIV"
+	DIV_ASSIGN   T_Token = "DIV_ASSIGN"
 	AST          T_Token = "AST"
+	MUL_ASSIGN   T_Token = "MUL_ASSIGN"
 	DOT          T_Token = "DOT"
 	LNBRK        T_Token = "LNBRK"
 	COLON        T_Token = "COLON"
@@ -48,12 +52,10 @@ const (
 	FAT_ARROW    T_Token = "FAT_ARROW"
 	SWITCH       T_Token = "SWITCH"
 	FOR          T_Token = "FOR"
-	RANGE        T_Token = "RANGE"
 	IN           T_Token = "IN"
 	VAR          T_Token = "VAR"
 	BREAK        T_Token = "BREAK"
 	CONT         T_Token = "CONT"
-	LOOP         T_Token = "LOOP"
 	IMPORT       T_Token = "IMPORT"
 	NEW          T_Token = "NEW"
 	PUB          T_Token = "PUB"
@@ -68,6 +70,9 @@ const (
 	VOID         T_Token = "VOID"
 	END          T_Token = "END"
 	EMIT         T_Token = "EMIT"
+	FORMAT       T_Token = "FORMAT"
+	MOD          T_Token = "MOD"
+	MOD_ASSIGN   T_Token = "MOD_ASSIGN"
 )
 
 var keywords = map[string]T_Token{
@@ -84,7 +89,6 @@ var keywords = map[string]T_Token{
 	"var":       VAR,
 	"break":     BREAK,
 	"continue":  CONT,
-	"loop":      LOOP,
 	"import":    IMPORT,
 	"new":       NEW,
 	"pub":       PUB,
@@ -172,11 +176,11 @@ func (l *Lexer) skipWhitespace() {
 			}
 			l.readChar()
 			l.currentLine++
-			l.currentColumn = 0
+			l.currentColumn = 1
 		case '\n':
 			l.readChar()
 			l.currentLine++
-			l.currentColumn = 0
+			l.currentColumn = 1
 		}
 	}
 }
@@ -200,10 +204,18 @@ func (l *Lexer) nextToken() Token {
 	case '}':
 		t = Token{Type: RBRACE, Literal: string(l.ch), Position: pos}
 	case '+':
-		t = Token{Type: PLUS, Literal: string(l.ch), Position: pos}
+		if l.peek() == '=' {
+			t = Token{Type: PLUS_ASSIGN, Literal: "+=", Position: pos}
+			l.readChar()
+		} else {
+			t = Token{Type: PLUS, Literal: string(l.ch), Position: pos}
+		}
 	case '-':
 		if l.peek() == '>' {
 			t = Token{Type: RETURN_ARROW, Literal: "->", Position: pos}
+			l.readChar()
+		} else if l.peek() == '=' {
+			t = Token{Type: MINUS_ASSIGN, Literal: "-=", Position: pos}
 			l.readChar()
 		} else {
 			t = Token{Type: MINUS, Literal: string(l.ch), Position: pos}
@@ -212,13 +224,21 @@ func (l *Lexer) nextToken() Token {
 		if l.peek() == '/' {
 			l.discardComment()
 			return l.nextToken()
+		} else if l.peek() == '=' {
+			t = Token{Type: DIV_ASSIGN, Literal: "/=", Position: pos}
+			l.readChar()
 		} else {
 			t = Token{Type: DIV, Literal: string(l.ch), Position: pos}
 		}
 	case ',':
 		t = Token{Type: COMMA, Literal: string(l.ch), Position: pos}
 	case '*':
-		t = Token{Type: AST, Literal: string(l.ch), Position: pos}
+		if l.peek() == '=' {
+			t = Token{Type: MUL_ASSIGN, Literal: "*=", Position: pos}
+			l.readChar()
+		} else {
+			t = Token{Type: AST, Literal: string(l.ch), Position: pos}
+		}
 	case ':':
 		if l.peek() == ':' {
 			t = Token{Type: DCOLON, Literal: "::", Position: pos}
@@ -250,6 +270,13 @@ func (l *Lexer) nextToken() Token {
 		} else {
 			t = Token{Type: NOT, Literal: "!", Position: pos}
 		}
+	case '%':
+		if l.peek() == '=' {
+			t = Token{Type: MOD_ASSIGN, Literal: "%=", Position: pos}
+			l.readChar()
+		} else {
+			t = Token{Type: MOD, Literal: string(l.ch), Position: pos}
+		}
 	case '=':
 		if l.peek() == '=' {
 			t = Token{Type: EQ, Literal: "==", Position: pos}
@@ -261,12 +288,7 @@ func (l *Lexer) nextToken() Token {
 			t = Token{Type: ASSIGN, Literal: string(l.ch), Position: pos}
 		}
 	case '.':
-		if l.peek() == '.' {
-			t = Token{Type: RANGE, Literal: "..", Position: pos}
-			l.readChar()
-		} else {
-			t = Token{Type: DOT, Literal: string(l.ch), Position: pos}
-		}
+		t = Token{Type: DOT, Literal: string(l.ch), Position: pos}
 	case '|':
 		t = Token{Type: PIPE, Literal: string(l.ch), Position: pos}
 	case 0:
@@ -278,6 +300,13 @@ func (l *Lexer) nextToken() Token {
 		return t
 	case ';':
 		t = Token{Type: END, Literal: string(l.ch), Position: pos}
+	case 'f':
+		if l.peek() == '"' {
+			t = Token{Type: FORMAT, Literal: string(l.ch), Position: pos}
+			l.readChar()
+			return t
+		}
+		fallthrough
 	default:
 		t.Position = pos
 		if isLetter(l.ch) {

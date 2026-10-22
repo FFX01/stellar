@@ -35,3 +35,16 @@ first-class "optional" type. Decide the `Some/None` vs `Ok/Err` convention accor
   `Error` require (e.g. `message: str`)?
 - Is there a builtin `error_T` created via `errors.new()`?
 - Are user errors captureable in `try … else |e|` and matchable?
+
+### #commas — trailing commas
+**Question:** should a trailing comma be allowed (or required, or rejected)
+consistently in every comma-separated list?
+
+**Current parser behaviour (inconsistent):**
+- Accepted: object fields, enum members, enum variant fields, switch arms
+  (expression arms *require* one, block arms make it optional).
+- Rejected: call arguments, function parameters, function-type parameters,
+  sequence literals, type arguments, type parameters in `fn name[...]`.
+
+Relevant because multi-line calls (e.g. `strings.format(...)` in the reference
+program) break as soon as someone adds a trailing comma.

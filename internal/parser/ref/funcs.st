@@ -6,3 +6,14 @@ pub fn add(a: int, b: int) -> Result[int] {
 pub fn handle[T](arg: T) -> Action {
     return Action(item=arg);
 }
+
+fn actionAdd(state: *State, title: str) -> Result {
+    var t = new Todo;
+    try t.rename(title) else |e| {
+        return wrap(e, AddError("unable to add todo"));
+    }
+    state.addTodo(t);
+    return Ok();
+}
+
+

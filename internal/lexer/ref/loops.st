@@ -1,4 +1,4 @@
-for i in 0..10 {
+for _, i in range(0, 10) {
     print(i)
 }
 

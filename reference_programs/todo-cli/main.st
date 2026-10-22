@@ -33,7 +33,7 @@ pub type Todo object {
     status: Status,
 }
 impl Todo {
-    fn rename(self: *Todo, name: str) Result {
+    fn rename(self: *Todo, name: str) -> Result {
         if len(name) > 256 {
             return NameTooLongError("name needs to be < 256 in length");
         }
@@ -44,7 +44,11 @@ impl Todo {
 
 impl Stringable for Todo {
     fn string(self) -> str {
-        return f"{self.title}: {self.status}";
+        return strings.format(
+            "{title}: {status}", 
+            title=self.title, 
+            status=self.status
+        );
     }
 }
 
@@ -56,16 +60,16 @@ impl State {
         self.items = append(self.items, todo);
     }
     fn getAtIndex(self: State, index: int) -> Maybe[*Todo] {
-        return try self.todos[index];
+        return try self.items[index];
     }
     fn count(self: State) -> int {
-        return len(self.todos);
+        return len(self.items);
     }
 }
 impl Stringable for State {
     fn string(self) -> str {
         var out = buffer.StringBuffer.new();  // type: *buffer.StringBuffer
-        for t in self.todos {
+        for _, t in self.items {
             out.write(t + "\n");  // Works because Todo implements Stringable
         }
         return out.toString();
@@ -79,12 +83,13 @@ type Action enum {
     Exit,
 }
 
-type AddError object impl Error {}
+type AddError object {}
+impl Error for AddError {}
 
 fn actionAdd(state: *State, title: str) -> Result {
     var t = new Todo;
     try t.rename(title) else |e| {
-        return wrap(e, AddError("unable to add todo");
+        return wrap(e, AddError("unable to add todo"));
     }
     state.addTodo(t);
     return Ok();
@@ -100,13 +105,13 @@ fn actionExit() {
 
 fn dispatch(state: *State, action: Action) -> Result {
     switch action {
-        Add => { return actionAdd(state, action.title); }
-        List => {
+        Action.Add => { return actionAdd(state, action.title); }
+        Action.List => {
             actionList(state);
             return Ok();
         }
-        NoOp => { return Ok(); }
-        Exit => actionExit(),
+        Action.NoOp => { return Ok(); }
+        Action.Exit => actionExit(),
     }
 }
 
@@ -120,10 +125,11 @@ fn parse(cmd: str) -> Result[Action] {
             var title = try args[1] else {
                 return Err("you need to provide a title");
             };
-            >> Ok(Action.Add(title=title);
+            >> Ok(Action.Add(title=title));
         }
         "list" => Ok(Action.List),
         "exit" => Ok(Action.Exit),
+        None => Err("Command missing"),
         _ => Err("invalid command"),
     }
 }
@@ -131,7 +137,7 @@ fn parse(cmd: str) -> Result[Action] {
 fn main() {
     var state = new State;  // `new` kw returns a pointer/ref
     var stdin = new io.StdIn;
-    loop {
+    for {
         var command = try stdin.read();  // errors here should panic since it is unhandled
         var action = try parse(command) else |e| {
             print(e.message);
@@ -140,6 +146,6 @@ fn main() {
         try dispatch(state, action) else |e| {
             print(e.message);
             continue;
-        };
+        }
     }
 }
