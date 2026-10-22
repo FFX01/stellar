@@ -294,20 +294,6 @@ func (s *SwitchExpr) String() string {
 	)
 }
 
-type NewExpr struct {
-	Token lexer.Token
-	Type  Type
-}
-
-func (n *NewExpr) TokenLiteral() string { return n.Token.Literal }
-func (n *NewExpr) expr()                {}
-func (n *NewExpr) String() string {
-	return fmt.Sprintf(
-		"NewExpr(%s)",
-		pointerToString(n.Type),
-	)
-}
-
 type IfExpr struct {
 	Token     lexer.Token
 	Condition Expression
@@ -364,6 +350,20 @@ func (a *ArrayType) typ()                 {}
 func (a *ArrayType) String() string {
 	v := strconv.FormatInt(a.Length, 10)
 	return fmt.Sprintf("ArrayType (%s, %s)", pointerToString(a.ElementType), v)
+}
+
+type RefExpr struct {
+	Token lexer.Token
+	Value Expression
+}
+
+func (r *RefExpr) TokenLiteral() string { return r.Token.Literal }
+func (r *RefExpr) expr()                {}
+func (r *RefExpr) String() string {
+	return fmt.Sprintf(
+		"RefType(%s)",
+		pointerToString(r.Value),
+	)
 }
 
 type PointerType struct {

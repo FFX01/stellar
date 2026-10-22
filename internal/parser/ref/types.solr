@@ -49,3 +49,8 @@ type Status enum {
     InProgress,
     Done,
 }
+
+fn main() {
+    var a: *Store[str, int] = &Store();
+    var a = 1 + &2;
+}

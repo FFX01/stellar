@@ -87,7 +87,7 @@ type AddError object {}
 impl Error for AddError {}
 
 fn actionAdd(state: *State, title: str) -> Result {
-    var t = new Todo;
+    var t = new(Todo);
     try t.rename(title) else |e| {
         return wrap(e, AddError("unable to add todo"));
     }
@@ -135,8 +135,8 @@ fn parse(cmd: str) -> Result[Action] {
 }
 
 fn main() {
-    var state = new State;  // `new` kw returns a pointer/ref
-    var stdin = new io.StdIn;
+    var state = new(State);  // `new` builtin returns a ref
+    var stdin = new(io.StdIn);
     for {
         var command = try stdin.read();  // errors here should panic since it is unhandled
         var action = try parse(command) else |e| {

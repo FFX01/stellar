@@ -353,6 +353,13 @@ func (p *Parser) parseNegativeExpr() ast.Expression {
 	return n
 }
 
+func (p *Parser) parseRefExpr() ast.Expression {
+	tok := p.expect(lexer.REF)
+	n := &ast.RefExpr{Token: tok}
+	n.Value = p.parseExpression(PUnary)
+	return n
+}
+
 func (p *Parser) parseIfExpr() ast.Expression {
 	tok := p.expect(lexer.IF)
 	n := &ast.IfExpr{Token: tok}
@@ -362,13 +369,6 @@ func (p *Parser) parseIfExpr() ast.Expression {
 		p.advance()
 		n.Else = p.parseExpression(PLowest)
 	}
-	return n
-}
-
-func (p *Parser) parseNewExpr() ast.Expression {
-	tok := p.expect(lexer.NEW)
-	n := &ast.NewExpr{Token: tok}
-	n.Type = p.parseType()
 	return n
 }
 
@@ -553,11 +553,11 @@ func NewParser(input []lexer.Token) *Parser {
 	p.prefixFuncs[lexer.TRY] = p.parseTryExpr
 	p.prefixFuncs[lexer.LBRACE] = p.parseBlockExpr
 	p.prefixFuncs[lexer.SWITCH] = p.parseSwitchExpr
-	p.prefixFuncs[lexer.NEW] = p.parseNewExpr
 	p.prefixFuncs[lexer.IF] = p.parseIfExpr
 	p.prefixFuncs[lexer.NOT] = p.parseNotExpr
 	p.prefixFuncs[lexer.MINUS] = p.parseNegativeExpr
 	p.prefixFuncs[lexer.FOR] = p.parseForExpr
+	p.prefixFuncs[lexer.REF] = p.parseRefExpr
 
 	p.infixFuncs[lexer.LPAREN] = p.parseCallExpr
 	p.infixFuncs[lexer.DOT] = p.parseMemberExpr

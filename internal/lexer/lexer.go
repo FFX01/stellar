@@ -57,7 +57,6 @@ const (
 	BREAK        T_Token = "BREAK"
 	CONT         T_Token = "CONT"
 	IMPORT       T_Token = "IMPORT"
-	NEW          T_Token = "NEW"
 	PUB          T_Token = "PUB"
 	INTERFACE    T_Token = "INTERFACE"
 	ENUM         T_Token = "ENUM"
@@ -73,6 +72,7 @@ const (
 	FORMAT       T_Token = "FORMAT"
 	MOD          T_Token = "MOD"
 	MOD_ASSIGN   T_Token = "MOD_ASSIGN"
+	REF          T_Token = "REF"
 )
 
 var keywords = map[string]T_Token{
@@ -90,7 +90,6 @@ var keywords = map[string]T_Token{
 	"break":     BREAK,
 	"continue":  CONT,
 	"import":    IMPORT,
-	"new":       NEW,
 	"pub":       PUB,
 	"interface": INTERFACE,
 	"enum":      ENUM,
@@ -270,6 +269,8 @@ func (l *Lexer) nextToken() Token {
 		} else {
 			t = Token{Type: NOT, Literal: "!", Position: pos}
 		}
+	case '&':
+		t = Token{Type: REF, Literal: string(l.ch), Position: pos}
 	case '%':
 		if l.peek() == '=' {
 			t = Token{Type: MOD_ASSIGN, Literal: "%=", Position: pos}
