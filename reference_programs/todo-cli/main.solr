@@ -142,7 +142,7 @@ fn main() {
         var action = try parse(command) else |e| {
             print(e.message);
             continue;
-        };
+        }
         try dispatch(state, action) else |e| {
             print(e.message);
             continue;

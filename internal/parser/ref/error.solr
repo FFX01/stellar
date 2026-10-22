@@ -1,0 +1,20 @@
+fn main[] {}
+
+fn main() {
+    var 1 +2 = impl;
+    var a = 1;
+    for _, i in range(0..10) {
+        c := try f() else { >> 1 + b; }
+    }
+    return try f();
+
+    switch a (
+        12 => return c;
+    }
+}
+
+// fn f() {}}
+
+// fn f(() {}
+
+fn f( x; var y = 1; }

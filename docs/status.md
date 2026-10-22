@@ -36,8 +36,13 @@ first-class "optional" type. Decide the `Some/None` vs `Ok/Err` convention accor
 - Is there a builtin `error_T` created via `errors.new()`?
 - Are user errors captureable in `try … else |e|` and matchable?
 
-### #commas — trailing commas
-**Question:** should a trailing comma be allowed (or required, or rejected)
+### #commas — trailing commas [RESOLVED 2026-10-21]
+**Decision:** trailing commas are optional in every comma-separated list.
+`;` is a terminator (required after every statement, including the last
+one in a block) except after an item ending in `}`. Switch arms follow the same
+`}` rule: a comma is optional after a block arm, required between expression arms.
+
+**Original question:** should a trailing comma be allowed (or required, or rejected)
 consistently in every comma-separated list?
 
 **Current parser behaviour (inconsistent):**

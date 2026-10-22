@@ -2,7 +2,6 @@ package parser
 
 import (
 	"fmt"
-	"log"
 	"slices"
 	"stellar/internal/ast"
 	"stellar/internal/lexer"
@@ -65,6 +64,7 @@ type Parser struct {
 	tokens []lexer.Token
 	pos    int
 	errors []Error
+	depth  int
 
 	prefixFuncs map[lexer.T_Token]prefixParseFunc
 	infixFuncs  map[lexer.T_Token]infixParseFunc
@@ -97,6 +97,9 @@ func (p *Parser) recall(n int) lexer.Token {
 func (p *Parser) recallCheck(n int, t lexer.T_Token) bool {
 	return p.recall(n).Type == t
 }
+
+type bailout struct{}
+
 func (p *Parser) error(t lexer.Token, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	msg = fmt.Sprintf(
@@ -106,10 +109,16 @@ func (p *Parser) error(t lexer.Token, format string, args ...any) {
 		p.cur().Literal,
 		p.peek(1).Literal,
 	) + msg
-	log.Print(msg)
 	p.errors = append(p.errors, Error{Position: t.Position, Message: msg})
+	panic(bailout{})
 }
+
 func (p *Parser) advance() lexer.Token {
+	if p.check(lexer.LBRACE) {
+		p.depth++
+	} else if p.check(lexer.RBRACE) && p.depth > 0 {
+		p.depth--
+	}
 	if p.pos < len(p.tokens)-1 {
 		p.pos++
 	}
@@ -173,13 +182,7 @@ func (p *Parser) parseName() *ast.Name {
 func (p *Parser) parseBlockExpr() ast.Expression {
 	tok := p.expect(lexer.LBRACE)
 	n := &ast.BlockExpr{Token: tok}
-	for !p.check(lexer.RBRACE) && !p.check(lexer.EOF) {
-		n.Statements = append(n.Statements, p.parseStatement())
-		if p.check(lexer.RBRACE) {
-			break
-		}
-	}
-	p.expect(lexer.RBRACE)
+	n.Statements = parseList(p, blockList, p.parseStatement)
 	return n
 }
 
@@ -193,7 +196,6 @@ func (p *Parser) parseSwitchArm() *ast.SwitchArm {
 		p.accept(lexer.COMMA)
 	} else {
 		n.Value = p.parseExpression(PLowest)
-		p.expect(lexer.COMMA)
 	}
 	return n
 }
@@ -203,13 +205,7 @@ func (p *Parser) parseSwitchExpr() ast.Expression {
 	n := &ast.SwitchExpr{Token: tok}
 	n.Subject = p.parseExpression(PLowest)
 	p.expect(lexer.LBRACE)
-	for !p.check(lexer.RBRACE) && !p.check(lexer.EOF) {
-		n.Arms = append(n.Arms, p.parseSwitchArm())
-		if p.check(lexer.RBRACE) {
-			break
-		}
-	}
-	p.expect(lexer.RBRACE)
+	n.Arms = parseList(p, armList, p.parseSwitchArm)
 	return n
 }
 
@@ -314,28 +310,18 @@ func (p *Parser) parseMemberExpr(left ast.Expression) ast.Expression {
 func (p *Parser) parseCallExpr(left ast.Expression) ast.Expression {
 	op := p.expect(lexer.LPAREN)
 	n := &ast.CallExpr{Token: op, Left: left}
-	if !p.check(lexer.RPAREN) && !p.check(lexer.EOF) {
-		n.Args = append(n.Args, p.parseArgument())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			n.Args = append(n.Args, p.parseArgument())
-		}
-	}
-	p.expect(lexer.RPAREN)
+	n.Args = parseList(p, parenList, p.parseArgument)
 	return n
 }
 
 func (p *Parser) parseSequenceLiteralExpr() ast.Expression {
 	op := p.expect(lexer.LBRACK)
 	n := &ast.SequenceLiteral{Token: op}
-	if !p.check(lexer.RBRACK) {
-		n.Elements = append(n.Elements, p.parseExpression(PLowest))
-		for p.check(lexer.COMMA) {
-			p.advance()
-			n.Elements = append(n.Elements, p.parseExpression(PLowest))
-		}
-	}
-	p.expect(lexer.RBRACK)
+	n.Elements = parseList(
+		p,
+		brackList,
+		func() ast.Expression { return p.parseExpression(PLowest) },
+	)
 	return n
 }
 
@@ -413,12 +399,7 @@ func (p *Parser) parseType() ast.Type {
 		}
 		if p.cur().Type == lexer.LBRACK {
 			p.advance()
-			n.Args = append(n.Args, p.parseType())
-			for p.cur().Type == lexer.COMMA {
-				p.advance()
-				n.Args = append(n.Args, p.parseType())
-			}
-			p.expect(lexer.RBRACK)
+			n.Args = parseList(p, brackList, p.parseType)
 		}
 		return n
 	case lexer.FUNC:
@@ -484,17 +465,7 @@ func (p *Parser) parseObjectType() ast.Type {
 	tok := p.expect(lexer.OBJ)
 	n := &ast.ObjectType{Token: tok}
 	p.expect(lexer.LBRACE)
-	if !p.check(lexer.RBRACE) {
-		n.Fields = append(n.Fields, p.parseField())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			if p.check(lexer.RBRACE) {
-				break
-			}
-			n.Fields = append(n.Fields, p.parseField())
-		}
-	}
-	p.expect(lexer.RBRACE)
+	n.Fields = parseList(p, braceList, p.parseField)
 	return n
 }
 
@@ -503,17 +474,7 @@ func (p *Parser) parseEnumMember() *ast.EnumMember {
 	n := &ast.EnumMember{Token: tok, Name: tok.Literal}
 	if p.check(lexer.LPAREN) {
 		p.advance()
-		if !p.check(lexer.RPAREN) {
-			n.Fields = append(n.Fields, p.parseField())
-			for p.check(lexer.COMMA) {
-				p.advance()
-				if p.check(lexer.RPAREN) {
-					break
-				}
-				n.Fields = append(n.Fields, p.parseField())
-			}
-		}
-		p.expect(lexer.RPAREN)
+		n.Fields = parseList(p, parenList, p.parseField)
 	}
 	return n
 }
@@ -522,17 +483,7 @@ func (p *Parser) parseEnumType() ast.Type {
 	tok := p.expect(lexer.ENUM)
 	n := &ast.EnumType{Token: tok}
 	p.expect(lexer.LBRACE)
-	if !p.check(lexer.RBRACE) {
-		n.Members = append(n.Members, p.parseEnumMember())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			if p.check(lexer.RBRACE) {
-				break
-			}
-			n.Members = append(n.Members, p.parseEnumMember())
-		}
-	}
-	p.expect(lexer.RBRACE)
+	n.Members = parseList(p, braceList, p.parseEnumMember)
 	return n
 }
 
@@ -574,9 +525,8 @@ func NewParser(input []lexer.Token) *Parser {
 }
 
 func (p *Parser) parseVarStmt(pub bool) *ast.VarStmt {
-	n := new(ast.VarStmt)
-	n.IsPublic = pub
-	n.Token = p.expect(lexer.VAR)
+	tok := p.expect(lexer.VAR)
+	n := &ast.VarStmt{Token: tok, IsPublic: pub}
 	n.Name = p.expect(lexer.IDENT)
 	if p.cur().Type == lexer.COLON {
 		p.advance()
@@ -584,7 +534,6 @@ func (p *Parser) parseVarStmt(pub bool) *ast.VarStmt {
 	}
 	p.expect(lexer.ASSIGN)
 	n.Value = p.parseExpression(PLowest)
-	p.expect(lexer.END)
 	return n
 }
 
@@ -639,10 +588,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		stmt = p.parseEmitStatement()
 	case lexer.BREAK:
 		stmt = &ast.BreakStmt{Token: p.expect(lexer.BREAK)}
-		p.expect(lexer.END)
 	case lexer.CONT:
 		stmt = &ast.ContinueStmt{Token: p.expect(lexer.CONT)}
-		p.expect(lexer.END)
 	default:
 		stmt = p.parseOtherStmt()
 	}
@@ -672,9 +619,6 @@ func (p *Parser) parseOtherStmt() ast.Statement {
 	} else {
 		n = &ast.ExpressionStatement{Token: tok, Expression: left}
 	}
-	if !p.recallCheck(1, lexer.RBRACE) {
-		p.expect(lexer.END)
-	}
 	return n
 }
 
@@ -686,7 +630,6 @@ func (p *Parser) parseImportStmt() *ast.ImportStmt {
 		p.advance()
 		n.Path = append(n.Path, p.expect(lexer.IDENT))
 	}
-	p.expect(lexer.END)
 	return n
 }
 
@@ -705,25 +648,10 @@ func (p *Parser) parseFunctionSignature() *ast.FunctionSignature {
 	n := &ast.FunctionSignature{Token: tok, Name: tok.Literal}
 	if p.check(lexer.LBRACK) {
 		p.advance()
-		n.TypeParams = append(n.TypeParams, p.parseTypeParam())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			n.TypeParams = append(n.TypeParams, p.parseTypeParam())
-			if p.check(lexer.RBRACK) {
-				break
-			}
-		}
-		p.expect(lexer.RBRACK)
+		n.TypeParams = parseList(p, brackList, p.parseTypeParam)
 	}
 	p.expect(lexer.LPAREN)
-	if p.check(lexer.IDENT) {
-		n.Parameters = append(n.Parameters, p.parseParam())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			n.Parameters = append(n.Parameters, p.parseParam())
-		}
-	}
-	p.expect(lexer.RPAREN)
+	n.Parameters = parseList(p, parenList, p.parseParam)
 	if p.check(lexer.RETURN_ARROW) {
 		p.advance()
 		n.ReturnType = p.parseType()
@@ -753,14 +681,7 @@ func (p *Parser) parseFunctionType() ast.Type {
 	tok := p.expect(lexer.FUNC)
 	n := &ast.FunctionType{Token: tok}
 	p.expect(lexer.LPAREN)
-	if !p.check(lexer.RPAREN) {
-		n.Parameters = append(n.Parameters, p.parseFunctionTypeParam())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			n.Parameters = append(n.Parameters, p.parseFunctionTypeParam())
-		}
-	}
-	p.expect(lexer.RPAREN)
+	n.Parameters = parseList(p, parenList, p.parseFunctionTypeParam)
 	if p.check(lexer.RETURN_ARROW) {
 		p.advance()
 		n.ReturnType = p.parseType()
@@ -774,9 +695,6 @@ func (p *Parser) parseEmitStatement() ast.Statement {
 	if !p.check(lexer.END) {
 		n.Value = p.parseExpression(PLowest)
 	}
-	if !p.recallCheck(1, lexer.RBRACE) {
-		p.expect(lexer.END)
-	}
 	return n
 }
 
@@ -784,9 +702,6 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStmt {
 	n := &ast.ReturnStmt{Token: p.expect(lexer.RETURN)}
 	if !p.check(lexer.END) {
 		n.Value = p.parseExpression(PLowest)
-	}
-	if !p.recallCheck(1, lexer.RBRACE) {
-		p.expect(lexer.END)
 	}
 	return n
 }
@@ -829,15 +744,7 @@ func (p *Parser) parseTypeDecl(pub bool) ast.Statement {
 	var parameters []*ast.TypeParameter
 	if p.check(lexer.LBRACK) {
 		p.advance()
-		parameters = append(parameters, p.parseTypeParam())
-		for p.check(lexer.COMMA) {
-			p.advance()
-			if p.check(lexer.RBRACK) {
-				break
-			}
-			parameters = append(parameters, p.parseTypeParam())
-		}
-		p.expect(lexer.RBRACK)
+		parameters = parseList(p, brackList, p.parseTypeParam)
 	}
 	if p.check(lexer.ASSIGN) {
 		n := &ast.TypeAliasStmt{
@@ -848,7 +755,6 @@ func (p *Parser) parseTypeDecl(pub bool) ast.Statement {
 		}
 		p.advance()
 		n.Value = p.parseType()
-		p.expect(lexer.END)
 		return n
 	} else {
 		n := &ast.TypeDeclStmt{
@@ -883,21 +789,114 @@ func (p *Parser) next() ast.Statement {
 		return p.parseTypeDecl(pub)
 	case lexer.IMPL:
 		return p.parseImplDeclStmt()
+	case lexer.VAR:
+		return p.parseVarStmt(pub)
 	default:
 		p.error(p.cur(), "Unexpected token: %s", p.cur().Literal)
-		p.pos++
 		return nil
+	}
+}
+
+var topStarts = map[lexer.T_Token]bool{
+	lexer.FUNC: true, lexer.TYPE: true, lexer.IMPL: true,
+	lexer.IMPORT: true, lexer.PUB: true, lexer.VAR: true,
+}
+
+var stmtStarts = map[lexer.T_Token]bool{
+	lexer.VAR: true, lexer.RETURN: true, lexer.BREAK: true,
+	lexer.CONT: true, lexer.FOR: true, lexer.EMIT: true,
+}
+
+var (
+	parenList = listOpts{sep: lexer.COMMA, close: lexer.RPAREN}
+	brackList = listOpts{sep: lexer.COMMA, close: lexer.RBRACK}
+	braceList = listOpts{sep: lexer.COMMA, close: lexer.RBRACE}
+	armList   = listOpts{sep: lexer.COMMA, close: lexer.RBRACE, braceEnds: true}
+	blockList = listOpts{sep: lexer.END, close: lexer.RBRACE,
+		terminate: true, braceEnds: true, starts: stmtStarts}
+	topList = listOpts{sep: lexer.END, close: lexer.EOF,
+		terminate: true, braceEnds: true, starts: topStarts} // fn type impl import pub
+)
+
+type listOpts struct {
+	sep       lexer.T_Token
+	close     lexer.T_Token
+	terminate bool                   // sep reuired after each item
+	braceEnds bool                   // items ending in `}` do not require a sep
+	starts    map[lexer.T_Token]bool // tokens that begin an item (used for sync stops)
+}
+
+// parseList parses items up to and including `opts.close`. It is assumed that the
+// caller has already consumed the opening token. Failed items are skipped.
+func parseList[T any](p *Parser, opts listOpts, parseF func() T) []T {
+	var items []T
+	for !p.check(opts.close) && !p.check(lexer.EOF) {
+		v, more, ok := parseListItem(p, opts, parseF)
+		if ok {
+			items = append(items, v)
+		}
+		if !more {
+			break
+		}
+	}
+	p.expect(opts.close)
+	return items
+}
+
+// parseListItem parses one item and its seperator. This is the only recover point in
+// the parser. if more == false, the list must end.
+func parseListItem[T any](p *Parser, opts listOpts, parseF func() T) (v T, more, ok bool) {
+	start, depth := p.pos, p.depth
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		if _, isBail := r.(bailout); !isBail {
+			panic(r)
+		}
+		p.syncList(opts, start, depth)
+		more, ok = true, false
+	}()
+
+	v = parseF()
+	switch {
+	case p.accept(opts.sep):
+		return v, true, true
+	case opts.braceEnds && p.recallCheck(1, lexer.RBRACE):
+		return v, true, true
+	case opts.terminate: // If we require termination and we get here, that means a missing sep
+		p.error(p.cur(), "Expected %s, got %s", opts.sep, p.cur().Type)
+	}
+	return v, false, true
+}
+
+// syncList skips to the next separator(consumed, closer, or item start at the depth
+// where the failed item began.
+func (p *Parser) syncList(opts listOpts, start, depth int) {
+	for !p.check(lexer.EOF) {
+		t := p.cur().Type
+		if p.depth < depth {
+			depth = p.depth
+		}
+		if p.depth == depth {
+			switch {
+			case t == opts.close:
+				return
+			case t == opts.sep:
+				p.advance()
+				return
+			case opts.starts[t] && p.pos > start:
+				return
+			}
+		}
+		p.advance()
 	}
 }
 
 func (p *Parser) Parse() *ast.Program {
 	program := new(ast.Program)
+	program.Statements = parseList(p, topList, p.next)
 
-	for p.cur().Type != lexer.EOF {
-		n := p.next()
-		if n != nil {
-			program.Statements = append(program.Statements, n)
-		}
-	}
 	return program
 }
