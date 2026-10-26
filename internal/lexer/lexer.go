@@ -29,10 +29,10 @@ const (
 	MINUS_ASSIGN T_Token = "MINUS_ASSIGN"
 	DIV          T_Token = "DIV"
 	DIV_ASSIGN   T_Token = "DIV_ASSIGN"
-	AST          T_Token = "AST"
+	MUL          T_Token = "MUL"
 	MUL_ASSIGN   T_Token = "MUL_ASSIGN"
 	DOT          T_Token = "DOT"
-	LNBRK        T_Token = "LNBRK"
+	GRANT        T_Token = "GRANT"
 	COLON        T_Token = "COLON"
 	DCOLON       T_Token = "DCOLON"
 	GT           T_Token = "GT"
@@ -45,6 +45,7 @@ const (
 	ELSE         T_Token = "ELSE"
 	RETURN       T_Token = "RETURN"
 	TRY          T_Token = "TRY"
+	MUST         T_Token = "MUST"
 	FUNC         T_Token = "FUNC"
 	TYPE         T_Token = "TYPE"
 	IMPL         T_Token = "IMPL"
@@ -61,18 +62,15 @@ const (
 	INTERFACE    T_Token = "INTERFACE"
 	ENUM         T_Token = "ENUM"
 	OBJ          T_Token = "OBJ"
-	AS           T_Token = "AS"
 	AND          T_Token = "AND"
 	OR           T_Token = "OR"
 	TRUE         T_Token = "TRUE"
 	FALSE        T_Token = "FALSE"
-	VOID         T_Token = "VOID"
 	END          T_Token = "END"
 	EMIT         T_Token = "EMIT"
-	FORMAT       T_Token = "FORMAT"
 	MOD          T_Token = "MOD"
 	MOD_ASSIGN   T_Token = "MOD_ASSIGN"
-	REF          T_Token = "REF"
+	MUT          T_Token = "MUT"
 )
 
 var keywords = map[string]T_Token{
@@ -80,6 +78,7 @@ var keywords = map[string]T_Token{
 	"else":      ELSE,
 	"return":    RETURN,
 	"try":       TRY,
+	"must":      MUST,
 	"fn":        FUNC,
 	"type":      TYPE,
 	"impl":      IMPL,
@@ -94,11 +93,11 @@ var keywords = map[string]T_Token{
 	"interface": INTERFACE,
 	"enum":      ENUM,
 	"object":    OBJ,
-	"as":        AS,
 	"and":       AND,
 	"or":        OR,
 	"true":      TRUE,
 	"false":     FALSE,
+	"mut":       MUT,
 	";":         END,
 }
 
@@ -236,8 +235,10 @@ func (l *Lexer) nextToken() Token {
 			t = Token{Type: MUL_ASSIGN, Literal: "*=", Position: pos}
 			l.readChar()
 		} else {
-			t = Token{Type: AST, Literal: string(l.ch), Position: pos}
+			t = Token{Type: MUL, Literal: string(l.ch), Position: pos}
 		}
+	case '@':
+		t = Token{Type: GRANT, Literal: string(l.ch), Position: pos}
 	case ':':
 		if l.peek() == ':' {
 			t = Token{Type: DCOLON, Literal: "::", Position: pos}
@@ -269,8 +270,6 @@ func (l *Lexer) nextToken() Token {
 		} else {
 			t = Token{Type: NOT, Literal: "!", Position: pos}
 		}
-	case '&':
-		t = Token{Type: REF, Literal: string(l.ch), Position: pos}
 	case '%':
 		if l.peek() == '=' {
 			t = Token{Type: MOD_ASSIGN, Literal: "%=", Position: pos}
@@ -301,13 +300,6 @@ func (l *Lexer) nextToken() Token {
 		return t
 	case ';':
 		t = Token{Type: END, Literal: string(l.ch), Position: pos}
-	case 'f':
-		if l.peek() == '"' {
-			t = Token{Type: FORMAT, Literal: string(l.ch), Position: pos}
-			l.readChar()
-			return t
-		}
-		fallthrough
 	default:
 		t.Position = pos
 		if isLetter(l.ch) {

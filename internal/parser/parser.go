@@ -33,6 +33,7 @@ const (
 )
 
 var PMap = map[lexer.T_Token]Precedence{
+	lexer.COLON:  PLowest,
 	lexer.OR:     POr,
 	lexer.AND:    PAnd,
 	lexer.EQ:     PEquals,
@@ -43,7 +44,7 @@ var PMap = map[lexer.T_Token]Precedence{
 	lexer.LTE:    PRelational,
 	lexer.PLUS:   PSum,
 	lexer.MINUS:  PSum,
-	lexer.AST:    PProduct,
+	lexer.MUL:    PProduct,
 	lexer.DIV:    PProduct,
 	lexer.MOD:    PProduct,
 	lexer.LPAREN: PCall,
@@ -174,11 +175,6 @@ func (p *Parser) parseBoolLiteralExpr() ast.Expression {
 	return n
 }
 
-func (p *Parser) parseName() *ast.Name {
-	tok := p.expect(lexer.IDENT)
-	return &ast.Name{Token: tok, Value: tok.Literal}
-}
-
 func (p *Parser) parseBlockExpr() ast.Expression {
 	tok := p.expect(lexer.LBRACE)
 	n := &ast.BlockExpr{Token: tok}
@@ -193,7 +189,6 @@ func (p *Parser) parseSwitchArm() *ast.SwitchArm {
 	p.expect(lexer.FAT_ARROW)
 	if p.check(lexer.LBRACE) {
 		n.Value = p.parseBlockExpr()
-		p.accept(lexer.COMMA)
 	} else {
 		n.Value = p.parseExpression(PLowest)
 	}
@@ -203,9 +198,18 @@ func (p *Parser) parseSwitchArm() *ast.SwitchArm {
 func (p *Parser) parseSwitchExpr() ast.Expression {
 	tok := p.expect(lexer.SWITCH)
 	n := &ast.SwitchExpr{Token: tok}
-	n.Subject = p.parseExpression(PLowest)
+	if !p.check(lexer.LBRACE) {
+		n.Subject = p.parseExpression(PLowest)
+	}
 	p.expect(lexer.LBRACE)
 	n.Arms = parseList(p, armList, p.parseSwitchArm)
+	return n
+}
+
+func (p *Parser) parseMustExpr() ast.Expression {
+	tok := p.expect(lexer.MUST)
+	n := &ast.MustExpr{Token: tok}
+	n.Value = p.parseExpression(PLowest)
 	return n
 }
 
@@ -332,16 +336,16 @@ func (p *Parser) parseNotExpr() ast.Expression {
 	return n
 }
 
-func (p *Parser) parseNegativeExpr() ast.Expression {
-	tok := p.expect(lexer.MINUS)
-	n := &ast.NegativeExpr{Token: tok}
+func (p *Parser) parseGrantExpr() ast.Expression {
+	tok := p.expect(lexer.GRANT)
+	n := &ast.GrantExpr{Token: tok}
 	n.Value = p.parseExpression(PUnary)
 	return n
 }
 
-func (p *Parser) parseRefExpr() ast.Expression {
-	tok := p.expect(lexer.REF)
-	n := &ast.RefExpr{Token: tok}
+func (p *Parser) parseNegativeExpr() ast.Expression {
+	tok := p.expect(lexer.MINUS)
+	n := &ast.NegativeExpr{Token: tok}
 	n.Value = p.parseExpression(PUnary)
 	return n
 }
@@ -358,57 +362,68 @@ func (p *Parser) parseIfExpr() ast.Expression {
 	return n
 }
 
-func (p *Parser) parseType() ast.Type {
+func (p *Parser) parseSliceType() ast.Type {
+	tok := p.expect(lexer.LBRACK)
+	n := &ast.SliceType{Token: tok}
+	p.expect(lexer.RBRACK)
+	n.ElementType = p.parseTypePrefix()
+	return n
+}
+
+func (p *Parser) parseMutableType() ast.Type {
+	tok := p.expect(lexer.MUT)
+	n := &ast.MutableType{Token: tok}
+	n.Value = p.parseTypePrefix()
+	return n
+}
+
+func (p *Parser) parseNamedType() ast.Type {
+	tok := p.expect(lexer.IDENT)
+	n := &ast.NamedType{Token: tok}
+	if p.check(lexer.DOT) {
+		n.Path = append(n.Path, tok.Literal)
+		for p.check(lexer.DOT) {
+			p.advance()
+			if p.peekCheck(1, lexer.DOT) {
+				n.Path = append(n.Path, p.expect(lexer.IDENT).Literal)
+			}
+		}
+		n.Name = p.expect(lexer.IDENT).Literal
+	} else {
+		n.Name = tok.Literal
+	}
+	if p.cur().Type == lexer.LBRACK {
+		p.advance()
+		n.Args = parseList(p, brackList, p.parseType)
+	}
+	return n
+}
+
+func (p *Parser) parseTypePrefix() ast.Type {
+	var n ast.Type
 	switch p.cur().Type {
+	case lexer.MUT:
+		n = p.parseMutableType()
 	case lexer.LBRACK:
-		tok := p.expect(lexer.LBRACK)
-		if p.check(lexer.RBRACK) {
-			n := &ast.SliceType{Token: tok}
-			p.advance()
-			n.ElementType = p.parseType()
-			return n
-		} else if p.check(lexer.INT) {
-			n := &ast.ArrayType{Token: tok}
-			v, err := strconv.ParseInt(p.expect(lexer.INT).Literal, 10, 64)
-			if err != nil {
-				n.Length = v
-			}
-			p.expect(lexer.RBRACK)
-			n.ElementType = p.parseType()
-			return n
-		}
-	case lexer.AST:
-		tok := p.expect(lexer.AST)
-		n := &ast.PointerType{Token: tok}
-		n.ElementType = p.parseType()
-		return n
+		n = p.parseSliceType()
 	case lexer.IDENT:
-		tok := p.expect(lexer.IDENT)
-		n := &ast.NamedType{Token: tok}
-		if p.check(lexer.DOT) {
-			n.Path = append(n.Path, tok.Literal)
-			for p.check(lexer.DOT) {
-				p.advance()
-				if p.peekCheck(1, lexer.DOT) {
-					n.Path = append(n.Path, p.expect(lexer.IDENT).Literal)
-				}
-			}
-			n.Name = p.expect(lexer.IDENT).Literal
-		} else {
-			n.Name = tok.Literal
-		}
-		if p.cur().Type == lexer.LBRACK {
-			p.advance()
-			n.Args = parseList(p, brackList, p.parseType)
-		}
-		return n
+		n = p.parseNamedType()
 	case lexer.FUNC:
-		return p.parseFunctionType()
+		n = p.parseFunctionType()
 	default:
 		p.error(p.cur(), "unexpected token for type: %s", p.cur().Literal)
 		return nil
 	}
-	return nil
+	return n
+}
+
+func (p *Parser) parseType() ast.Type {
+	start := p.pos
+	n := p.parseTypePrefix()
+	if p.accept(lexer.NOT) {
+		return &ast.ResultType{Token: p.tokens[start], Value: n}
+	}
+	return n
 }
 
 func (p *Parser) parseBinaryExpr(left ast.Expression) ast.Expression {
@@ -448,10 +463,10 @@ func (p *Parser) parseInterfaceType() ast.Type {
 	p.expect(lexer.LBRACE)
 	if !p.check(lexer.RBRACE) {
 		p.expect(lexer.FUNC)
-		n.Methods = append(n.Methods, p.parseFunctionSignature())
+		n.Methods = append(n.Methods, p.parseFunctionSignature(false))
 		for p.check(lexer.FUNC) {
 			p.advance()
-			n.Methods = append(n.Methods, p.parseFunctionSignature())
+			n.Methods = append(n.Methods, p.parseFunctionSignature(false))
 			if p.check(lexer.RBRACE) {
 				break
 			}
@@ -502,20 +517,24 @@ func NewParser(input []lexer.Token) *Parser {
 	p.prefixFuncs[lexer.TRUE] = p.parseBoolLiteralExpr
 	p.prefixFuncs[lexer.FALSE] = p.parseBoolLiteralExpr
 	p.prefixFuncs[lexer.TRY] = p.parseTryExpr
+	p.prefixFuncs[lexer.MUST] = p.parseMustExpr
 	p.prefixFuncs[lexer.LBRACE] = p.parseBlockExpr
 	p.prefixFuncs[lexer.SWITCH] = p.parseSwitchExpr
 	p.prefixFuncs[lexer.IF] = p.parseIfExpr
 	p.prefixFuncs[lexer.NOT] = p.parseNotExpr
 	p.prefixFuncs[lexer.MINUS] = p.parseNegativeExpr
 	p.prefixFuncs[lexer.FOR] = p.parseForExpr
-	p.prefixFuncs[lexer.REF] = p.parseRefExpr
+	p.prefixFuncs[lexer.COLON] = p.parseSliceExprPrefix
+	p.prefixFuncs[lexer.GRANT] = p.parseGrantExpr
+	p.prefixFuncs[lexer.FUNC] = p.parseFunctionExpr
 
 	p.infixFuncs[lexer.LPAREN] = p.parseCallExpr
 	p.infixFuncs[lexer.DOT] = p.parseMemberExpr
 	p.infixFuncs[lexer.LBRACK] = p.parseSubscriptExpr
+	p.infixFuncs[lexer.COLON] = p.parseSliceExprInfix
 
 	for _, t := range []lexer.T_Token{
-		lexer.PLUS, lexer.MINUS, lexer.DIV, lexer.AST, lexer.EQ,
+		lexer.PLUS, lexer.MINUS, lexer.DIV, lexer.MUL, lexer.EQ,
 		lexer.NEQ, lexer.LT, lexer.LTE, lexer.GT, lexer.GTE,
 		lexer.AND, lexer.OR, lexer.MOD,
 	} {
@@ -548,6 +567,22 @@ func (p *Parser) parseSubscriptExpr(left ast.Expression) ast.Expression {
 func (p *Parser) parseIdentifierExpr() ast.Expression {
 	tok := p.expect(lexer.IDENT)
 	return &ast.IdentifierExpr{Token: tok, Value: tok.Literal}
+}
+
+func (p *Parser) parseSliceExprInfix(left ast.Expression) ast.Expression {
+	tok := p.expect(lexer.COLON)
+	n := &ast.SliceExpr{Token: tok, Start: left}
+	if !p.check(lexer.RBRACK) {
+		n.End = p.parseExpression(PLowest)
+	}
+	return n
+}
+
+func (p *Parser) parseSliceExprPrefix() ast.Expression {
+	tok := p.expect(lexer.COLON)
+	n := &ast.SliceExpr{Token: tok}
+	n.End = p.parseExpression(PLowest)
+	return n
 }
 
 func (p *Parser) parseExpression(minPrec Precedence) ast.Expression {
@@ -643,9 +678,15 @@ func (p *Parser) parseParam() *ast.Parameter {
 	return &ast.Parameter{Token: name, Name: name.Literal, Type: paramType}
 }
 
-func (p *Parser) parseFunctionSignature() *ast.FunctionSignature {
-	tok := p.expect(lexer.IDENT)
-	n := &ast.FunctionSignature{Token: tok, Name: tok.Literal}
+func (p *Parser) parseFunctionSignature(isExpr bool) *ast.FunctionSignature {
+	n := &ast.FunctionSignature{}
+	if !isExpr {
+		tok := p.expect(lexer.IDENT)
+		n.Token = tok
+		n.Name = tok.Literal
+	} else {
+		n.Token = p.recall(1)
+	}
 	if p.check(lexer.LBRACK) {
 		p.advance()
 		n.TypeParams = parseList(p, brackList, p.parseTypeParam)
@@ -659,11 +700,31 @@ func (p *Parser) parseFunctionSignature() *ast.FunctionSignature {
 	return n
 }
 
+func (p *Parser) parseFunctionExpr() ast.Expression {
+	p.expect(lexer.FUNC)
+	n := &ast.FunctionExpr{}
+	n.Signature = p.parseFunctionSignature(true)
+	switch {
+	case p.check(lexer.LBRACE):
+		n.Body = p.parseBlockExpr()
+	case p.check(lexer.COLON):
+		p.advance()
+		n.Body = p.parseExpression(PLowest)
+	}
+	return n
+}
+
 func (p *Parser) parseFunctionStmt(pub bool) *ast.FunctionStmt {
 	p.expect(lexer.FUNC)
 	n := &ast.FunctionStmt{IsPublic: pub}
-	n.Signature = p.parseFunctionSignature()
-	n.Body = p.parseBlockExpr()
+	n.Signature = p.parseFunctionSignature(false)
+	switch {
+	case p.check(lexer.LBRACE):
+		n.Body = p.parseBlockExpr()
+	case p.check(lexer.COLON):
+		p.advance()
+		n.Body = p.parseExpression(PLowest)
+	}
 	return n
 }
 
@@ -714,14 +775,7 @@ func (p *Parser) parseTypeParam() *ast.TypeParameter {
 func (p *Parser) parseImplDeclStmt() ast.Statement {
 	tok := p.expect(lexer.IMPL)
 	n := &ast.ImplDeclStmt{Token: tok}
-	interfaceOrTarget := p.parseType()
-	if p.check(lexer.FOR) {
-		n.Interface = interfaceOrTarget
-		p.advance()
-		n.Target = p.parseType()
-	} else {
-		n.Target = interfaceOrTarget
-	}
+	n.Target = p.parseType()
 	p.expect(lexer.LBRACE)
 	if !p.check(lexer.RBRACE) && !p.check(lexer.EOF) {
 		pub := p.accept(lexer.PUB)

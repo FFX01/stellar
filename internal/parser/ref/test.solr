@@ -1,0 +1,6 @@
+fn main[T, V]() -> [][]T[[][]V]! {
+    myFunc(f=fn() -> bool: a == b);
+    var a = fn[T](v: T) -> T!: Ok(v);
+    a("hello");
+    var b = must a("world!");
+}

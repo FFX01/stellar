@@ -1,0 +1,145 @@
+// Experimenting with passing mutable references:
+// - a function that accepts a mut reference can only be called synchronously
+// - a function that accepts an immutable ref can be called async/concurrently and synchorously
+// - Methods with receivers can always take mutable references and may never be called
+//   async or accross threads.
+// - any value created/declared within a scope belongs to that scope.
+// - A value passed to a scope that expects a mutable ref must explcititly declare the
+//   the value mutable when passed. 
+// - A scope must own a value in order to pass a mtable reference to it.
+type Lexer object {
+    pub input: str,
+    pub pos: int
+}
+impl Lexer {
+    pub fn cur(self: mut Lexer) -> str! {
+        return self.input.get(self.pos);
+    }
+    pub fn advance(self: mut Lexer) {
+        self.pos += 1;
+    }
+    pub fn peek(self: Lexer, n: int) -> str! {
+        return self.input.get(self.pos + n);
+    }
+    pub fn skipWhitespace(self: mut Lexer) {
+        var cur = try self.cur() else { return; }
+        for wsChars.contains(cur) {
+            self.advance();
+        }
+    }
+}
+
+var wsChars: []str = ["\r", "\n", "\t", " "];
+
+type Kind enum {
+    Plus,
+    Minus,
+    Int,
+    Eof,
+    Illegal
+}
+
+type Token object {
+    pub kind: Kind,
+    pub lit: str
+}
+
+fn lexInt(l: mut Lexer) -> Token {
+    var start = l.pos;
+    for {
+        var cur = try l.cur() else { break; }
+        l.advance();
+        if !isDigit(cur) { break; }
+    }
+    return Token(kind=Kind.Int, lit=l.input[start:l.pos]);
+}
+
+fn isDigit(ch: str) -> bool: ch >= "0" and ch <= "9";
+
+
+// declaring a param as `mut` means this scope takes "ownership" of the variable.
+// in concurrent/async scenarios where we cannot guarantee order of execution, values
+// cannot be passed between "actors" that accept mutable values.
+fn next(lexer: mut Lexer) -> Token {
+    lexer.skipWhitespace();  
+    var ch = try lexer.cur() else {
+        return Token(kind=Kind.Eof, lit="");
+    }
+    var tok = switch ch {
+        "+" => Token(kind=Kind.Plus, lit=ch),
+        "-" => Token(kind=Kind.Minus, lit=ch),
+        _ => {
+            >> switch {
+                isDigit(ch) => lexInt(l=@lexer),
+                _ => Token(kind=Kind.Illegal, lit=ch)
+            }
+        }
+    }
+    lexer.advance();
+    return tok;
+}
+
+fn lex(input: str) -> []Token {
+    var lexer = Lexer(input=input, pos=0);  // any value created in this scope can be mutated within it.
+    var tokens: []Token = [];
+    for {
+        var tok = next(@lexer);  // next needs mutable access, without @ op, this wouldn't compile
+        tokens.push(tok);
+        if tok.kind == Kind.Eof {
+            break;
+        }
+    }
+    return tokens;
+}
+
+fn wontLex(lexer: Lexer) -> []Token {
+    var tokens: []Token = [];
+    for {
+        var tok = next(lexer);  // compiler error, need mutable value
+        tokens.push(tok);  // ok, we own tokens
+        if tok.kind == Kind.Eof {
+            break;
+        }
+    }
+    return tokens;
+}
+
+fn willLex(l: Lexer) -> []Token {
+    var l2 = l;
+    var tokens: []Token = [];
+    for {
+        var tok = next(@l2);  // we created a copy that we now own, so this is ok
+        tokens.push(tok);  // we own tokens, ok.
+        if tok.kind == Kind.Eof {
+            break;
+        }
+    }
+    return tokens;
+}
+
+fn mutLex(l: mut Lexer) -> []Token {
+    var tokens: []Token = [];
+    for {
+        var tok = next(@l);  // ok; we own l for now.
+        tokens.push(tok);  // we own tokens
+        if tok.kind == Kind.Eof {
+            break;
+        }
+    }
+    return tokens;
+}
+
+// Would probably be something more like `actor asyncLex(...)`, but waiting to implement
+fn asyncLex(lexer: Lexer) -> []Token {  // actor fns cannot accept mutable values. period.
+    // we can't mutate lexer, so we need a copy
+    var l = lexer;
+    var tokens: []Token = [];
+    for {
+        var tok = next(@l);  // This is ok, we own l
+        tokens.push(tok);  // tokens was declared in this scope, so we can mutate it
+        if tok.kind == Kind.Eof {
+            break;
+        }
+    }
+    return tokens;
+}

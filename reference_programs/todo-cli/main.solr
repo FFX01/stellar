@@ -33,12 +33,11 @@ pub type Todo object {
     status: Status,
 }
 impl Todo {
-    fn rename(self: *Todo, name: str) -> Result {
+    fn rename(self: Todo, name: str) -> Todo {
         if len(name) > 256 {
             return NameTooLongError("name needs to be < 256 in length");
         }
-        self.title = name;
-        return Ok();
+        return Ok(Todo(..self, title=name));
     }
 }
 

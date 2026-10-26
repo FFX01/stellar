@@ -1,0 +1,210 @@
+import std::io;
+import std::random;
+import std::errors;
+
+type Reducable interface {
+    fn reduce[accT, itemT](self, acc: accT, f: fn(accT, itemT) -> accT
+}
+
+type Jsonable interface {
+    fn json(self) -> Json!
+}
+
+type Json {
+    value: map[str, Jsonable]
+}
+impl Json {
+    pub fn new(..args: Jsonable) -> Json! {
+        const rFn = fn(acc: map[str, Jsonable], i: Jsonable) -> acc.add(i.name, i.value);
+        var v: map[str, Jsonable] = args.reduce(map.new(str, Jsonable), rFn);  // args is a slice of arguments, slice satisfies 'Reducable`.
+        return Json(value=v);
+    }
+    pub fn string(self) -> str {
+        var items: []str = for k, v in self.value {
+            >> fmt.print("\"%s\": %s", k, v.json());
+        }
+        return "{" + strings.join(items, ",") + "}";
+    }
+}
+
+type ItemId str;
+
+type Item object {
+    pub id: ItemId,
+    pub title: str,
+    pub description: str
+}
+impl Item {
+    pub fn json(self) -> Json! { // This means `Item` satisfies `Jsonable`.
+        return try Json.new(
+            id=str(self.id),
+            title=self.title,
+            description=self.description
+        );
+    }
+}
+
+type ItemRepo object {
+    items: []Item
+}
+impl ItemRepo {
+    pub fn get(id: ItemId) -> Item? {
+        for _, i in self.items {
+            if i.id == id {
+                return Some(i);
+            }
+        }
+        return None;
+    }
+    pub fn list(self) -> []Item {
+        return self.items;
+    }
+    pub fn delete(self, id: ItemId) -> ItemRepo! {
+        var idx: int?
+        for idx2, i in self.items {
+            if i.id == id {
+                idx = Some(idx2);
+                break;
+            }
+        }
+        if idx.some() {
+            return try self.with(items=self.items.deleteAt(idx));
+        } else {
+            return errors.errF("Item with id {} does not exist", id);
+        }
+    }
+    pub fn update(self, id: ItemId, item: Item) -> Item! {
+        var idx: int?
+        for idx2, i in self.items {
+            if i.id == id {
+                idx = Some(idx2);
+                break;
+            }
+        }
+        if idx.some() {
+            return try self.with(items=self.items.replace(idx, item));
+        } else {
+            return errors.errF("Item with id {} not found", id);
+        }
+    }
+}
+
+
+type ItemService interface {
+    fn get(id: ItemId) -> Item?
+    fn list() -> []Item
+    fn delete(id: ItemId) -> ItemService!
+    fn update(id: ItemId, item: Item) -> ItemService!
+}
+
+type App interface {
+    fn items() -> ItemService
+}
+
+type Method enum {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Head,
+    Options,
+    Delete
+}
+
+type Request object {
+    pub params map[str, str],
+    pub path: str,
+    pub method: Method
+    body: str
+}
+impl Request {
+    pub fn json(self) -> Json! {
+        return json.parse(self.body);
+    }
+}
+
+type Response object {
+    pub status: int,
+    pub body: str
+}
+impl Response {
+    pub fn err(self) -> str {  // This means `Response` satisfies `Error` interface.
+        return switch self.status {
+            400 => "Bad request",
+            404 => "Not found",
+            500 => "Internal server error",
+            _ => "Unknown"
+        }
+    }
+    pub fn error(status: int) -> Response {
+        var r = Response(status=status);
+        return r.with(body=r.err());
+    }
+    pub fn ok() -> Response {
+        return Response(status=200, body="Ok");
+    }
+    pub json(s: int, v: Jsonable) -> Response! {
+        var body = try v.json().string() else {
+            return Response.error(500);
+        }
+        return Response(status=s, body=body);
+    }
+}
+
+fn getItem(a: App, req: Request) -> Response! {
+    var id = try req.params.get("id") else {
+        return Err(Response.error(404));
+    }
+    var item = try s.items().get(ItemId(id)) else {
+        return Err(Response.error(404));
+    }
+    return Response.json(item)
+}
+
+fn updateItem(a: App, req: Request) -> (App, Response!) {
+    var id = try req.params.get("id") else {
+        return Err(Response.error(404));
+    }
+    var data = try req.json() else {
+        return Err(Response.error(400));
+    }
+    var newItem = Item(
+        id=random.string(32), 
+        title=data.get[str]("json", ""),
+        description=data.get[str]("description", "")
+    );
+    var app2 = a.with(items=a.items.update(id, newItem));
+    return (app2, Response.ok());
+
+
+type Server object {
+    pub app: App,
+    host: str,
+    port: int,
+    socket: io.Socket
+}
+impl Server {
+    fn new(app: App, host: str, port: int) -> Server! {
+       var s = try io.Socket.new(host, port); 
+       return Server(app=app, host=host, port=port, socket=s);
+    }
+}
+
+type MyApp {
+    items: ItemService
+}
+impl MyApp {
+    fn new(is: ItemService) -> MyApp {
+        return MyApp(items=is);
+    }
+    pub fn items() -> ItemService {
+        return self.items;
+    }
+}
+
+fn main() {
+    var itemRepo = ItemRepo();
+    var app = MyApp.new(items=itemRepo());
+    var server = Server.new(app=app, host="localhost", port=8000);
+}
+

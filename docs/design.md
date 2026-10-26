@@ -12,6 +12,10 @@ Source of truth for this iteration: `reference_programs/todo-cli/main.st`.
 
 - Resolved questions marked **[resolved]**. Open ones live in `docs/status.md`.
 
+- **Branch `immutability`:** see `docs/immutable-variant.md`. It overrides §2–§4
+  of this file on that branch (`try` / `must`, no `Maybe`, no pointers or `new`;
+  value semantics with `mut` parameters, per `reference_programs/lexer2`).
+
 ## Lexing [resolved]
 
 - Primitive/builtin types (`int`, `str`, `bool`, `float64`, …) are **not keywords** and get **no special token type** — they are lexed as plain `IDENT`, exactly like user-defined types (`Todo`, `APIError`). This keeps builtins and user types uniform at the lexer level.

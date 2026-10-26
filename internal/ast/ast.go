@@ -3,7 +3,6 @@ package ast
 import (
 	"fmt"
 	"stellar/internal/lexer"
-	"strconv"
 	"strings"
 )
 
@@ -77,19 +76,6 @@ func (s *SequenceLiteral) String() string {
 	return fmt.Sprintf("SequenceLiteral (%s)", sliceToString(s.Elements))
 }
 
-type Name struct {
-	Token lexer.Token
-	Value string
-}
-
-func (n *Name) TokenLiteral() string { return n.Token.Literal }
-func (n *Name) String() string {
-	return fmt.Sprintf(
-		"Name(%s)",
-		n.Value,
-	)
-}
-
 type BlockExpr struct {
 	Token      lexer.Token
 	Statements []Statement
@@ -101,6 +87,20 @@ func (b *BlockExpr) String() string {
 	return fmt.Sprintf(
 		"BlockExpr(%s)",
 		sliceToString(b.Statements),
+	)
+}
+
+type MustExpr struct {
+	Token lexer.Token
+	Value Expression
+}
+
+func (m *MustExpr) TokenLiteral() string { return m.Token.Literal }
+func (m *MustExpr) expr()                {}
+func (m *MustExpr) String() string {
+	return fmt.Sprintf(
+		"MustExpr(%s)",
+		pointerToString(m.Value),
 	)
 }
 
@@ -245,6 +245,36 @@ func (c *CallExpr) String() string {
 	)
 }
 
+type SliceExpr struct {
+	Token lexer.Token
+	Start Expression
+	End   Expression
+}
+
+func (s *SliceExpr) TokenLiteral() string { return s.Token.Literal }
+func (s *SliceExpr) expr()                {}
+func (s *SliceExpr) String() string {
+	return fmt.Sprintf(
+		"SliceExpr(%s, %s)",
+		pointerToString(s.Start),
+		pointerToString(s.End),
+	)
+}
+
+type GrantExpr struct {
+	Token lexer.Token
+	Value Expression
+}
+
+func (g *GrantExpr) TokenLiteral() string { return g.Token.Literal }
+func (g *GrantExpr) expr()                {}
+func (g *GrantExpr) String() string {
+	return fmt.Sprintf(
+		"GrantExpr(%s)",
+		pointerToString(g.Value),
+	)
+}
+
 type InfixExpr struct {
 	Token    lexer.Token
 	Left     Expression
@@ -339,44 +369,6 @@ func (s *SliceType) String() string {
 	return fmt.Sprintf("SliceType (%s)", pointerToString(s.ElementType))
 }
 
-type ArrayType struct {
-	Token       lexer.Token
-	ElementType Type
-	Length      int64
-}
-
-func (a *ArrayType) TokenLiteral() string { return a.Token.Literal }
-func (a *ArrayType) typ()                 {}
-func (a *ArrayType) String() string {
-	v := strconv.FormatInt(a.Length, 10)
-	return fmt.Sprintf("ArrayType (%s, %s)", pointerToString(a.ElementType), v)
-}
-
-type RefExpr struct {
-	Token lexer.Token
-	Value Expression
-}
-
-func (r *RefExpr) TokenLiteral() string { return r.Token.Literal }
-func (r *RefExpr) expr()                {}
-func (r *RefExpr) String() string {
-	return fmt.Sprintf(
-		"RefType(%s)",
-		pointerToString(r.Value),
-	)
-}
-
-type PointerType struct {
-	Token       lexer.Token
-	ElementType Type
-}
-
-func (p *PointerType) TokenLiteral() string { return p.Token.Literal }
-func (p *PointerType) typ()                 {}
-func (p *PointerType) String() string {
-	return fmt.Sprintf("PointerType (%s)", pointerToString(p.ElementType))
-}
-
 type NotExpr struct {
 	Token lexer.Token
 	Value Expression
@@ -405,6 +397,34 @@ func (n *NegativeExpr) String() string {
 	)
 }
 
+type MutableType struct {
+	Token lexer.Token
+	Value Type
+}
+
+func (m *MutableType) TokenLiteral() string { return m.Token.Literal }
+func (m *MutableType) typ()                 {}
+func (m *MutableType) String() string {
+	return fmt.Sprintf(
+		"MutableType(%s)",
+		pointerToString(m.Value),
+	)
+}
+
+type ResultType struct {
+	Token lexer.Token
+	Value Type
+}
+
+func (r *ResultType) TokenLiteral() string { return r.Token.Literal }
+func (r *ResultType) typ()                 {}
+func (r *ResultType) String() string {
+	return fmt.Sprintf(
+		"ResultType(%s)",
+		pointerToString(r.Value),
+	)
+}
+
 type NamedType struct {
 	Token lexer.Token
 	Path  []string
@@ -424,18 +444,16 @@ func (n *NamedType) String() string {
 }
 
 type ImplDeclStmt struct {
-	Token     lexer.Token
-	Interface Type
-	Target    Type
-	Methods   []*FunctionStmt
+	Token   lexer.Token
+	Target  Type
+	Methods []*FunctionStmt
 }
 
 func (i *ImplDeclStmt) TokenLiteral() string { return i.Token.Literal }
 func (i *ImplDeclStmt) stmt()                {}
 func (i *ImplDeclStmt) String() string {
 	return fmt.Sprintf(
-		"ImplDeclStmt(%s -> %s, %s)",
-		pointerToString(i.Interface),
+		"ImplDeclStmt(%s, %s)",
 		pointerToString(i.Target),
 		sliceToString(i.Methods),
 	)
@@ -666,6 +684,21 @@ func (f *FunctionSignature) String() string {
 	)
 }
 
+type FunctionExpr struct {
+	Signature *FunctionSignature
+	Body      Expression
+}
+
+func (f *FunctionExpr) TokenLiteral() string { return f.Signature.TokenLiteral() }
+func (f *FunctionExpr) expr()                {}
+func (f *FunctionExpr) String() string {
+	return fmt.Sprintf(
+		"FunctionExpr(%s, %s)",
+		pointerToString(f.Signature),
+		pointerToString(f.Body),
+	)
+}
+
 type FunctionStmt struct {
 	Signature *FunctionSignature
 	Body      Expression
@@ -728,6 +761,21 @@ type ContinueStmt struct {
 func (c *ContinueStmt) TokenLiteral() string { return c.Token.Literal }
 func (c *ContinueStmt) stmt()                {}
 func (c *ContinueStmt) String() string       { return "ContinueStmt" }
+
+type BadStmt struct {
+	From lexer.Token
+	To   lexer.Token
+}
+
+func (b *BadStmt) TokenLiteral() string { return b.From.Literal }
+func (b *BadStmt) stmt()                {}
+func (b *BadStmt) String() string {
+	return fmt.Sprintf(
+		"BadStmt(%s, %s)",
+		b.From.Literal,
+		b.To.Literal,
+	)
+}
 
 type Program struct {
 	Statements []Statement

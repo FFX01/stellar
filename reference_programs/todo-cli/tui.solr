@@ -1,0 +1,76 @@
+import std::tui;
+import std::fmt;
+
+type Model object {
+    counter: int,
+    state: State
+}
+impl Model {
+    pub fn new() -> Model {
+        return Model(state=Running);
+    }
+    pub fn getCounter(self) -> int {
+        return self.counter;
+    }
+    pub fn getState(self) -> State {
+        return self.state;
+    }
+}
+
+type State enum {
+    Running,
+    Done
+}
+
+type Msg enum {
+    Increment,
+    Decrement,
+    Reset,
+    Quit
+}
+
+fn update(model: Model, msg: Msg) -> Model, Msg? {
+    return switch msg {
+        Msg.Increment => (model.with(counter=model.counter + 1), None),
+        Msg.Decrement => (model.with(counter=model.counter - 1), None),
+        Msg.Reset => (Model.new(), None),
+        Msg.Quit => (model.with(state=State.Done), None),
+        _ => (model, None)
+    }
+}
+
+fn handleKeyEvent(e: tui.KeyEvent) -> Msg? {  // exploring `<type>?` as shorhand for `Maybe[<type>]`
+    return switch e.char {
+        'up' => Some(Msg.Increment),
+        'down' => Some(Msg.Decement),
+        'q' => Some(Msg.Quit),
+        _ => None
+    }
+}
+
+fn canFail() -> int! { return Err(Error()); }
+const canFail = fn -> int! () => Err(Error);
+
+
+fn view(m: Model) {
+    tui.renderWidget(
+        tui.Paragragh.new(fmt.print("Counter: {}", model.getCounter()),
+        tui.Area.new(w=10, h=10)
+    );
+}
+
+fn main() {
+    var terminal = try tui.Terminal.new();
+    var model = Model.new();
+
+    for model.getState() == State.Running {
+        try terminal.draw(fn() { return view(model); });
+        var keyEvent = try tui.pollKeyEvent(); // try on Maybe either unwraps value or returns None
+        var msg: Msg;
+        model, msg = update(handleKeyEvent(keyEvent));
+
+        for try msg {
+            model, msg = update(model, try msg);
+        }
+    }
+}
