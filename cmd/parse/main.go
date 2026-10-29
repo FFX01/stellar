@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"stellar/internal/ast"
@@ -21,6 +22,13 @@ func main() {
 
 	lexer := lexer.NewLexer(string(content))
 	tokens := lexer.Run()
+	lexerErrors := lexer.Errors()
+	if len(lexerErrors) > 0 {
+		fmt.Println("--- Lexer Errors ---")
+		for _, e := range lexerErrors {
+			fmt.Println(e.Message)
+		}
+	}
 
 	p := parser.NewParser(tokens)
 	program := p.Parse()

@@ -2,7 +2,13 @@ package lexer
 
 import (
 	"fmt"
+	"strconv"
 )
+
+type Error struct {
+	Position Position
+	Message  string
+}
 
 type T_Token string
 
@@ -29,10 +35,10 @@ const (
 	MINUS_ASSIGN T_Token = "MINUS_ASSIGN"
 	DIV          T_Token = "DIV"
 	DIV_ASSIGN   T_Token = "DIV_ASSIGN"
-	AST          T_Token = "AST"
+	MUL          T_Token = "MUL"
 	MUL_ASSIGN   T_Token = "MUL_ASSIGN"
 	DOT          T_Token = "DOT"
-	LNBRK        T_Token = "LNBRK"
+	COPY         T_Token = "COPY"
 	COLON        T_Token = "COLON"
 	DCOLON       T_Token = "DCOLON"
 	GT           T_Token = "GT"
@@ -45,6 +51,7 @@ const (
 	ELSE         T_Token = "ELSE"
 	RETURN       T_Token = "RETURN"
 	TRY          T_Token = "TRY"
+	MUST         T_Token = "MUST"
 	FUNC         T_Token = "FUNC"
 	TYPE         T_Token = "TYPE"
 	IMPL         T_Token = "IMPL"
@@ -61,18 +68,21 @@ const (
 	INTERFACE    T_Token = "INTERFACE"
 	ENUM         T_Token = "ENUM"
 	OBJ          T_Token = "OBJ"
-	AS           T_Token = "AS"
 	AND          T_Token = "AND"
 	OR           T_Token = "OR"
 	TRUE         T_Token = "TRUE"
 	FALSE        T_Token = "FALSE"
-	VOID         T_Token = "VOID"
 	END          T_Token = "END"
 	EMIT         T_Token = "EMIT"
-	FORMAT       T_Token = "FORMAT"
 	MOD          T_Token = "MOD"
 	MOD_ASSIGN   T_Token = "MOD_ASSIGN"
-	REF          T_Token = "REF"
+	MUT          T_Token = "MUT"
+	R_OK         T_Token = "R_OK"
+	R_ERR        T_Token = "R_ERR"
+	M_SOME       T_Token = "M_SOME"
+	M_NONE       T_Token = "M_NONE"
+	QUESTION     T_Token = "QUESTION"
+	SPREAD       T_Token = "SPREAD"
 )
 
 var keywords = map[string]T_Token{
@@ -80,6 +90,7 @@ var keywords = map[string]T_Token{
 	"else":      ELSE,
 	"return":    RETURN,
 	"try":       TRY,
+	"must":      MUST,
 	"fn":        FUNC,
 	"type":      TYPE,
 	"impl":      IMPL,
@@ -94,12 +105,15 @@ var keywords = map[string]T_Token{
 	"interface": INTERFACE,
 	"enum":      ENUM,
 	"object":    OBJ,
-	"as":        AS,
 	"and":       AND,
 	"or":        OR,
 	"true":      TRUE,
 	"false":     FALSE,
-	";":         END,
+	"mut":       MUT,
+	"Ok":        R_OK,
+	"Err":       R_ERR,
+	"Some":      M_SOME,
+	"None":      M_NONE,
 }
 
 func lookupIdent(ident string) T_Token {
@@ -140,6 +154,7 @@ type Lexer struct {
 	ch            byte
 	currentLine   int
 	currentColumn int
+	errors        []Error
 }
 
 func NewLexer(input string) *Lexer {
@@ -148,6 +163,19 @@ func NewLexer(input string) *Lexer {
 	l.currentLine = 1
 	l.readChar()
 	return l
+}
+
+func (l *Lexer) error(p Position, format string, args ...any) {
+	msg := fmt.Sprintf(
+		"%s %s",
+		p.String(),
+		fmt.Sprintf(format, args...),
+	)
+	l.errors = append(l.errors, Error{Position: p, Message: msg})
+}
+
+func (l *Lexer) Errors() []Error {
+	return l.errors
 }
 
 func (l *Lexer) readChar() {
@@ -236,8 +264,10 @@ func (l *Lexer) nextToken() Token {
 			t = Token{Type: MUL_ASSIGN, Literal: "*=", Position: pos}
 			l.readChar()
 		} else {
-			t = Token{Type: AST, Literal: string(l.ch), Position: pos}
+			t = Token{Type: MUL, Literal: string(l.ch), Position: pos}
 		}
+	case '@':
+		t = Token{Type: COPY, Literal: string(l.ch), Position: pos}
 	case ':':
 		if l.peek() == ':' {
 			t = Token{Type: DCOLON, Literal: "::", Position: pos}
@@ -269,8 +299,8 @@ func (l *Lexer) nextToken() Token {
 		} else {
 			t = Token{Type: NOT, Literal: "!", Position: pos}
 		}
-	case '&':
-		t = Token{Type: REF, Literal: string(l.ch), Position: pos}
+	case '?':
+		t = Token{Type: QUESTION, Literal: string(l.ch), Position: pos}
 	case '%':
 		if l.peek() == '=' {
 			t = Token{Type: MOD_ASSIGN, Literal: "%=", Position: pos}
@@ -289,7 +319,13 @@ func (l *Lexer) nextToken() Token {
 			t = Token{Type: ASSIGN, Literal: string(l.ch), Position: pos}
 		}
 	case '.':
-		t = Token{Type: DOT, Literal: string(l.ch), Position: pos}
+		if l.peek() == '.' && l.nPeek(1) == '.' {
+			l.readChar()
+			l.readChar()
+			t = Token{Type: SPREAD, Literal: "...", Position: pos}
+		} else {
+			t = Token{Type: DOT, Literal: string(l.ch), Position: pos}
+		}
 	case '|':
 		t = Token{Type: PIPE, Literal: string(l.ch), Position: pos}
 	case 0:
@@ -297,17 +333,17 @@ func (l *Lexer) nextToken() Token {
 	case '"':
 		t.Type = STRING
 		t.Position = pos
-		t.Literal = l.readString()
+		lit, err := l.readString()
+		if err != nil {
+			t.Type = ERR
+			t.Literal = string(l.ch)
+			l.error(pos, "%s", err.Error())
+			return t
+		}
+		t.Literal = lit
 		return t
 	case ';':
 		t = Token{Type: END, Literal: string(l.ch), Position: pos}
-	case 'f':
-		if l.peek() == '"' {
-			t = Token{Type: FORMAT, Literal: string(l.ch), Position: pos}
-			l.readChar()
-			return t
-		}
-		fallthrough
 	default:
 		t.Position = pos
 		if isLetter(l.ch) {
@@ -324,6 +360,8 @@ func (l *Lexer) nextToken() Token {
 					t.Literal += l.readNumber()
 				} else {
 					t.Type = ERR
+					l.error(pos, "Expected digit, got %v", l.ch)
+					l.readChar()
 				}
 				return t
 			}
@@ -332,6 +370,7 @@ func (l *Lexer) nextToken() Token {
 		} else {
 			t.Literal = string(l.ch)
 			t.Type = ERR
+			l.error(pos, "Unexpected character: %q", string(l.ch))
 		}
 	}
 
@@ -344,6 +383,13 @@ func (l *Lexer) peek() byte {
 		return 0
 	}
 	return l.input[l.readPos]
+}
+
+func (l *Lexer) nPeek(n int) byte {
+	if l.readPos+n >= len(l.input) {
+		return 0
+	}
+	return l.input[l.readPos+n]
 }
 
 func (l *Lexer) readIdentifier() string {
@@ -371,20 +417,31 @@ func (l *Lexer) discardComment() {
 	}
 }
 
-func (l *Lexer) readString() string {
+func (l *Lexer) readString() (string, error) {
 	l.readChar()
-	start := l.pos
+	start := l.pos - 1
 	for {
 		if l.ch == '"' || l.ch == 0 || l.ch == '\r' || l.ch == '\n' {
 			break
 		}
+		if l.ch == '\\' {
+			l.readChar()
+			l.readChar()
+			continue
+		}
 		l.readChar()
 	}
-	lit := l.input[start:l.pos]
-	if l.ch == '"' {
-		l.readChar()
+	if l.ch != '"' {
+		return "", fmt.Errorf("Unterminated string literal")
 	}
-	return lit
+	rawWithQuotes := l.input[start : l.pos+1]
+	l.readChar()
+
+	decoded, err := strconv.Unquote(rawWithQuotes)
+	if err != nil {
+		return "", fmt.Errorf("Invalid string literal: %w", err)
+	}
+	return decoded, nil
 }
 
 func (l *Lexer) Run() []Token {

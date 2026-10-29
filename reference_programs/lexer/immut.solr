@@ -1,0 +1,105 @@
+import std::errors;
+import std::log;
+
+type State object {
+    todos: []Todo
+}
+impl State {
+    fn nextId(self: State) -> int {
+        if len(self.todos) < 1 {
+            return 1;
+        }
+        return max(map(self.todos, fn(t: Todo) -> int: t.id)) + 1;
+    }
+}
+
+type Todo object {
+    id: int,
+    title: str,
+    status: Status
+}
+
+type Status enum {
+    InProgress,
+    Done
+}
+
+fn addTodo(s: State, t: Todo) -> State {
+    return s.with(todos=[..s.todos, t]);
+}
+
+fn getTodo(s: State, id: int) -> Todo! {
+    return s.todos.find(fn(t: Todo) -> bool: t.id == id);
+}
+
+fn completeTodo(s: State, id: int) -> State! {
+    var todo = try getTodo(s, id) else {
+        return errors.ErrF("Todo with id: {} not found.", id);
+    }
+    todo = todo.with(status=Status.Done);
+    var state = s.with(
+        todos=s.todos.take(idx) + [todo] + s.todos.skip(idx + 1)
+    );
+    return Ok(state);
+}
+
+fn markTodoInProgress(s: State, id: int) -> State! {
+    var todo = try getTodo(s, id) else {
+        return errors.ErrF("Todo with id: {} not found.", id);
+    }
+    todo = todo.with(status=Status.Done);
+    return Ok(
+        s.with(
+            todos=s.todos[:idx] + [todo] + s.todos[idx+1:]
+        )
+    );
+}
+
+fn deleteTodo(s: State, id: int) -> State! {
+    var idx = for i, t in s.todos {
+        if t.id == id {
+            >> 1;
+        }
+    }
+    if len(idx) == 0 {
+        return errors.ErrF("Todo with id {} not found.", id);
+    }
+    var newS = s.with(
+        todos=s.todos[:idx[0]] + s.todos[idx[0]+1:]
+    )l
+    return Ok(newS);
+}
+
+type Action enum {
+    Add(title: str),
+    Complete(id: int),
+    UnComplete(id: int),
+    Delete(id: int)
+}
+
+fn update(s: State, action: Action) -> State {
+    var newS = switch action {
+        is Add => addTodo(s, Todo(id=s.nextId(), title=action.title, status=Status.InProgress)),
+        is Complete => completeTodo(s, action.id,
+        is Uncomplete => markTodoInProgress(s, action.id),
+        is Delete => deleteTodo(s, action.id)
+    }
+    if newS.error() {
+        log.error(newS);
+        return s;
+    }
+    return newS;
+}
+
+fn main() {
+    var s = State(todos=[]);
+
+    for {
+        var args = io.stdin.input().split(" ");
+        var action = switch args[0] {
+            "add" => Action.Add(args[1])
+            "q" => break;
+        }
+    }
+}
+

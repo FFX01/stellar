@@ -1,0 +1,13 @@
+var greeting = "hello";
+var myInt = 1;
+var myFloat = 1.2;
+var myResult: int! = Ok(1);
+var neg: int = -1;
+var not: bool = !true;
+var works: int = 1 + 2;
+var binNoDecl = 1 + 2;
+var complexBin: float = 1.3 + 9.0 / 67.98 * 82.6;
+var groupedBin: int = (1 - 3 * 8) / 16;
+var withvars: int = myInt + neg;
+var withVarsnoType = myInt / neg;
+var varFloat = 1.5 - myFloat;

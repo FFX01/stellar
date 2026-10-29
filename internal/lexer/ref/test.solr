@@ -1,0 +1,6 @@
+fn main() {
+    var a = fn[T](a: T, b: T) -> int {
+        return a + b;
+    }
+    var b = "hello \t world!";
+}
