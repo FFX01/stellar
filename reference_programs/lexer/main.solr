@@ -105,7 +105,7 @@ fn wontLex(lexer: Lexer) -> []Token {
 }
 
 fn willLex(l: Lexer) -> []Token {
-    var l2 = l;
+    var l2 = copy(l);
     var tokens: []Token = [];
     for {
         var tok = next(@l2);  // we created a copy that we now own, so this is ok

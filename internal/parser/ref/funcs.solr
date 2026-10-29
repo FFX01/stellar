@@ -7,13 +7,15 @@ pub fn handle[T](arg: T) -> Action {
     return Action(item=arg);
 }
 
-fn actionAdd(state: *State, title: str) -> Result {
-    var t = new(Todo);
-    try t.rename(title) else |e| {
-        return wrap(e, AddError("unable to add todo"));
+fn actionAdd(state: State, title: str) -> State! {
+    mut t = Todo();
+    t.title = title;
+    var lastId = try state.todos.get(-1) else {
+        return errors.ErrF("Could not fetch last id!");
     }
-    state.addTodo(t);
-    return Ok();
+    mut newState = @state;
+    newState.todos.push(t);
+    return Ok(newState);
 }
 
 

@@ -12,13 +12,14 @@ Source of truth for this iteration: `reference_programs/todo-cli/main.st`.
 
 - Resolved questions marked **[resolved]**. Open ones live in `docs/status.md`.
 
-- **Branch `immutability`:** see `docs/immutable-variant.md`. It overrides §2–§4
-  of this file on that branch (`try` / `must`, no `Maybe`, no pointers or `new`;
-  value semantics with `mut` parameters, per `reference_programs/lexer2`).
+- **Branch `immutability`:** the language reference is `docs/language-spec.md`. See also
+  `docs/value-semantics.md`. It overrides §2–§4
+  of this file on that branch (`try` / `must`, no pointers or `new`; immutable values
+  with local `mut` variables).
 
 ## Lexing [resolved]
 
-- Primitive/builtin types (`int`, `str`, `bool`, `float64`, …) are **not keywords** and get **no special token type** — they are lexed as plain `IDENT`, exactly like user-defined types (`Todo`, `APIError`). This keeps builtins and user types uniform at the lexer level.
+- Primitive/builtin types (`int`, `str`, `bool`, `float`, …) are **not keywords** and get **no special token type** — they are lexed as plain `IDENT`, exactly like user-defined types (`Todo`, `APIError`). This keeps builtins and user types uniform at the lexer level.
 - Builtin *types* are resolved by the **checker** in type position, via a pre-seeded **type namespace** that is separate from the **value namespace** (so `int` as a type and `int` as a variable do not collide).
 - Keywords reserved by the lexer: `fn`, `type`, `pub`, `return`, `if`, `else`, `match`, `for`, `loop`, `in`, `new`, `try`, `as`, `impl`, `interface`, `enum`, `object`, `implements`, and operators/punctuation (`->`, `=>`, `|`, `[`, `]`, `(`, `)`, `+`, `==`, `!=`, `<=`, `>=`, `!`, …).
 - Reserved-name polish (e.g. forbidding `var int = 5`) is deferred to the checker if desired.
@@ -89,6 +90,37 @@ Source of truth for this iteration: `reference_programs/todo-cli/main.st`.
 - `object`, `enum`, `interface`, `implements` are keywords. They are **type constructors**
   (metatypes — they build types), not types, so the lexer must recognize them to parse
   what *kind* of type is being declared. Same rationale as `fn`/`type`.
+
+## 7. Numeric types and operators [resolved]
+
+- There are two numeric types, `int` and `float`. `float` is 64-bit. `int` is 64-bit where
+  the platform supports it, and 32-bit otherwise. There are no sized variants.
+- **No implicit numeric coercion.** An operator whose operands are one `int` and one
+  `float` is a type error, for every operator including `/`. Both operands must have the
+  same type. Example: `1 + 1.2` and `7.0 / 2` are errors; write `7.0 / 2.0`.
+  How to convert between `int` and `float` is not yet decided.
+- `int / int` is **floor division** (rounds toward negative infinity): `-7 / 2 == -4`.
+  The result type is `int`.
+- `float / float` is true division. The result type is `float`.
+- For `int`s, `%` takes the sign of the divisor, so `a / b * b + a % b == a` holds.
+  This follows from floor division.
+- Conversions are builtin functions: `int(x)`, `float(x)`, `str(x)`. They are the only way
+  to mix numeric types, since there is no implicit coercion.
+- The checker resolves the argument's type, so each conversion is selected at check time.
+  No runtime type dispatch is needed.
+- **TBD:** what each conversion accepts and how it fails. For example: does `int(3.7)`
+  truncate or floor? Does `int("42")` parse, and if so does it return `int!`? Is `str(true)`
+  allowed?
+
+## 8. Operator typing rules [resolved]
+
+- `+` on two `str` operands is **concatenation**, result `str`.
+- `==` and `!=` require both operands to have the same type. Different types are a
+  **compile error**, not `false`.
+- Ordering comparisons (`<`, `<=`, `>`, `>=`) are allowed on `str`, as well as on
+  `int` and `float`. Result `bool`. The ordering of `str` values (e.g. byte-wise or
+  Unicode code point) is **TBD**.
+- Operand types must match exactly for every operator (see section 7).
 
 ## Other inferred constructs (provisional, not yet agreed)
 

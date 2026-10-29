@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"stellar/internal/ast"
+	"stellar/internal/errors"
 	"stellar/internal/lexer"
 	"strconv"
 	"strings"
@@ -52,19 +53,10 @@ var PMap = map[lexer.T_Token]Precedence{
 	lexer.DOT:    PCall,
 }
 
-type Error struct {
-	Position lexer.Position
-	Message  string
-}
-
-func (e *Error) String() string {
-	return fmt.Sprintf("%s: %s", e.Position.String(), e.Message)
-}
-
 type Parser struct {
 	tokens []lexer.Token
 	pos    int
-	errors []Error
+	errors []errors.Error
 	depth  int
 
 	prefixFuncs map[lexer.T_Token]prefixParseFunc
@@ -102,15 +94,17 @@ func (p *Parser) recallCheck(n int, t lexer.T_Token) bool {
 type bailout struct{}
 
 func (p *Parser) error(t lexer.Token, format string, args ...any) {
+	if t.Type == lexer.ERR {
+		// enable recovery but do not record. Lexer already recorded it
+		panic(bailout{})
+	}
 	msg := fmt.Sprintf(format, args...)
 	msg = fmt.Sprintf(
-		"%d:%d %s %s: ",
-		p.cur().Position.Line,
-		p.cur().Position.Column,
+		"%s %s ",
 		p.cur().Literal,
 		p.peek(1).Literal,
 	) + msg
-	p.errors = append(p.errors, Error{Position: t.Position, Message: msg})
+	p.errors = append(p.errors, errors.Error{Position: t.Position, Message: msg})
 	panic(bailout{})
 }
 
@@ -209,14 +203,14 @@ func (p *Parser) parseSwitchExpr() ast.Expression {
 func (p *Parser) parseMustExpr() ast.Expression {
 	tok := p.expect(lexer.MUST)
 	n := &ast.MustExpr{Token: tok}
-	n.Value = p.parseExpression(PLowest)
+	n.Value = p.parseExpression(PUnary)
 	return n
 }
 
 func (p *Parser) parseTryExpr() ast.Expression {
 	tok := p.expect(lexer.TRY)
 	n := &ast.TryExpr{Token: tok}
-	n.Value = p.parseExpression(PLowest)
+	n.Value = p.parseExpression(PUnary)
 	if p.check(lexer.ELSE) {
 		p.advance()
 		if p.check(lexer.PIPE) {
@@ -240,14 +234,12 @@ func (p *Parser) parseStringLiteralExpr() ast.Expression {
 }
 
 func (p *Parser) parseIntegerLiteral() ast.Expression {
-	t := p.cur()
-	p.advance()
-	n := new(ast.IntegerLiteralExpr)
-	n.Token = t
+	tok := p.expect(lexer.INT)
+	n := &ast.IntegerLiteralExpr{Token: tok}
 
-	value, err := strconv.ParseInt(t.Literal, 0, 64)
+	value, err := strconv.ParseInt(tok.Literal, 0, 64)
 	if err != nil {
-		p.error(t, "Unable to parse int: %s", t.Literal)
+		p.error(tok, "Unable to parse int: %s", tok.Literal)
 		return nil
 	}
 	n.Value = value
@@ -299,7 +291,11 @@ func (p *Parser) parseArgument() *ast.Argument {
 	if p.check(lexer.IDENT) && p.peekCheck(1, lexer.ASSIGN) {
 		n.Name = p.expect(lexer.IDENT).Literal
 		p.expect(lexer.ASSIGN)
+	} else if p.check(lexer.SPREAD) {
+		n.Value = p.parseSpreadExpr()
+		return n
 	}
+
 	n.Value = p.parseExpression(PLowest)
 	return n
 }
@@ -311,7 +307,38 @@ func (p *Parser) parseMemberExpr(left ast.Expression) ast.Expression {
 	return n
 }
 
+func (p *Parser) parseMaybeExpr() ast.Expression {
+	tok := p.expectOneOf(lexer.M_SOME, lexer.M_NONE)
+	n := &ast.MaybeExpr{Token: tok}
+	p.expect(lexer.LPAREN)
+	switch tok.Type {
+	case lexer.M_SOME:
+		n.IsNone = false
+		n.Value = p.parseExpression(PLowest)
+	case lexer.M_NONE:
+		n.IsNone = true
+	}
+	p.expect(lexer.RPAREN)
+	return n
+}
+
+func (p *Parser) parseResultExpr() ast.Expression {
+	tok := p.expectOneOf(lexer.R_OK, lexer.R_ERR)
+	n := &ast.ResultExpr{Token: tok}
+	n.IsError = tok.Type == lexer.R_ERR
+	p.expect(lexer.LPAREN)
+	if p.accept(lexer.RPAREN) {
+		return n
+	}
+	n.Value = p.parseExpression(PLowest)
+	p.expect(lexer.RPAREN)
+	return n
+}
+
 func (p *Parser) parseCallExpr(left ast.Expression) ast.Expression {
+	if p.recall(1).Literal == "Ok" || p.recall(1).Literal == "Err" {
+		return p.parseResultExpr()
+	}
 	op := p.expect(lexer.LPAREN)
 	n := &ast.CallExpr{Token: op, Left: left}
 	n.Args = parseList(p, parenList, p.parseArgument)
@@ -324,7 +351,12 @@ func (p *Parser) parseSequenceLiteralExpr() ast.Expression {
 	n.Elements = parseList(
 		p,
 		brackList,
-		func() ast.Expression { return p.parseExpression(PLowest) },
+		func() ast.Expression {
+			if p.check(lexer.SPREAD) {
+				return p.parseSpreadExpr()
+			}
+			return p.parseExpression(PLowest)
+		},
 	)
 	return n
 }
@@ -336,9 +368,16 @@ func (p *Parser) parseNotExpr() ast.Expression {
 	return n
 }
 
-func (p *Parser) parseGrantExpr() ast.Expression {
-	tok := p.expect(lexer.GRANT)
-	n := &ast.GrantExpr{Token: tok}
+func (p *Parser) parseCopyExpr() ast.Expression {
+	tok := p.expect(lexer.COPY)
+	n := &ast.CopyExpr{Token: tok}
+	n.Value = p.parseExpression(PUnary)
+	return n
+}
+
+func (p *Parser) parseSpreadExpr() ast.Expression {
+	tok := p.expect(lexer.SPREAD)
+	n := &ast.SpreadExpr{Token: tok}
 	n.Value = p.parseExpression(PUnary)
 	return n
 }
@@ -370,13 +409,6 @@ func (p *Parser) parseSliceType() ast.Type {
 	return n
 }
 
-func (p *Parser) parseMutableType() ast.Type {
-	tok := p.expect(lexer.MUT)
-	n := &ast.MutableType{Token: tok}
-	n.Value = p.parseTypePrefix()
-	return n
-}
-
 func (p *Parser) parseNamedType() ast.Type {
 	tok := p.expect(lexer.IDENT)
 	n := &ast.NamedType{Token: tok}
@@ -402,8 +434,6 @@ func (p *Parser) parseNamedType() ast.Type {
 func (p *Parser) parseTypePrefix() ast.Type {
 	var n ast.Type
 	switch p.cur().Type {
-	case lexer.MUT:
-		n = p.parseMutableType()
 	case lexer.LBRACK:
 		n = p.parseSliceType()
 	case lexer.IDENT:
@@ -420,8 +450,18 @@ func (p *Parser) parseTypePrefix() ast.Type {
 func (p *Parser) parseType() ast.Type {
 	start := p.pos
 	n := p.parseTypePrefix()
-	if p.accept(lexer.NOT) {
+	// handles erroneous syntax like `var a: int!=Ok(1);`
+	if p.accept(lexer.NOT) || p.check(lexer.NEQ) {
+		if p.check(lexer.NEQ) {
+			p.tokens[p.pos] = lexer.Token{
+				Type:    lexer.ASSIGN,
+				Literal: "=", Position: p.cur().Position,
+			}
+		}
 		return &ast.ResultType{Token: p.tokens[start], Value: n}
+	}
+	if p.accept(lexer.QUESTION) {
+		return &ast.MaybeType{Token: p.tokens[start], Value: n}
 	}
 	return n
 }
@@ -445,11 +485,7 @@ func (p *Parser) parseGroupingExpr() ast.Expression {
 }
 
 func (p *Parser) parseField() *ast.Field {
-	pub := false
-	if p.check(lexer.PUB) {
-		p.advance()
-		pub = true
-	}
+	pub := p.accept(lexer.PUB)
 	tok := p.expect(lexer.IDENT)
 	n := &ast.Field{Token: tok, Name: tok.Literal, IsPublic: pub}
 	p.expect(lexer.COLON)
@@ -525,8 +561,12 @@ func NewParser(input []lexer.Token) *Parser {
 	p.prefixFuncs[lexer.MINUS] = p.parseNegativeExpr
 	p.prefixFuncs[lexer.FOR] = p.parseForExpr
 	p.prefixFuncs[lexer.COLON] = p.parseSliceExprPrefix
-	p.prefixFuncs[lexer.GRANT] = p.parseGrantExpr
+	p.prefixFuncs[lexer.COPY] = p.parseCopyExpr
 	p.prefixFuncs[lexer.FUNC] = p.parseFunctionExpr
+	p.prefixFuncs[lexer.R_OK] = p.parseResultExpr
+	p.prefixFuncs[lexer.R_ERR] = p.parseResultExpr
+	p.prefixFuncs[lexer.M_SOME] = p.parseMaybeExpr
+	p.prefixFuncs[lexer.M_NONE] = p.parseMaybeExpr
 
 	p.infixFuncs[lexer.LPAREN] = p.parseCallExpr
 	p.infixFuncs[lexer.DOT] = p.parseMemberExpr
@@ -543,9 +583,9 @@ func NewParser(input []lexer.Token) *Parser {
 	return p
 }
 
-func (p *Parser) parseVarStmt(pub bool) *ast.VarStmt {
-	tok := p.expect(lexer.VAR)
-	n := &ast.VarStmt{Token: tok, IsPublic: pub}
+func (p *Parser) parseVarStmt(pub, mut bool) *ast.VarStmt {
+	tok := p.expectOneOf(lexer.VAR, lexer.MUT)
+	n := &ast.VarStmt{Token: tok, IsPublic: pub, IsMut: mut}
 	n.Name = p.expect(lexer.IDENT)
 	if p.cur().Type == lexer.COLON {
 		p.advance()
@@ -616,7 +656,9 @@ func (p *Parser) parseStatement() ast.Statement {
 
 	switch p.cur().Type {
 	case lexer.VAR:
-		stmt = p.parseVarStmt(pub)
+		stmt = p.parseVarStmt(pub, false)
+	case lexer.MUT:
+		stmt = p.parseVarStmt(pub, true)
 	case lexer.RETURN:
 		stmt = p.parseReturnStatement()
 	case lexer.EMIT:
@@ -777,18 +819,10 @@ func (p *Parser) parseImplDeclStmt() ast.Statement {
 	n := &ast.ImplDeclStmt{Token: tok}
 	n.Target = p.parseType()
 	p.expect(lexer.LBRACE)
-	if !p.check(lexer.RBRACE) && !p.check(lexer.EOF) {
+	n.Methods = parseList(p, implList, func() *ast.FunctionStmt {
 		pub := p.accept(lexer.PUB)
-		n.Methods = append(n.Methods, p.parseFunctionStmt(pub))
-		for p.check(lexer.FUNC) || p.check(lexer.PUB) {
-			pub2 := p.accept(lexer.PUB)
-			n.Methods = append(n.Methods, p.parseFunctionStmt(pub2))
-			if p.check(lexer.RBRACE) {
-				break
-			}
-		}
-	}
-	p.expect(lexer.RBRACE)
+		return p.parseFunctionStmt(pub)
+	})
 	return n
 }
 
@@ -844,7 +878,7 @@ func (p *Parser) next() ast.Statement {
 	case lexer.IMPL:
 		return p.parseImplDeclStmt()
 	case lexer.VAR:
-		return p.parseVarStmt(pub)
+		return p.parseVarStmt(pub, false)
 	default:
 		p.error(p.cur(), "Unexpected token: %s", p.cur().Literal)
 		return nil
@@ -859,6 +893,11 @@ var topStarts = map[lexer.T_Token]bool{
 var stmtStarts = map[lexer.T_Token]bool{
 	lexer.VAR: true, lexer.RETURN: true, lexer.BREAK: true,
 	lexer.CONT: true, lexer.FOR: true, lexer.EMIT: true,
+	lexer.MUT: true,
+}
+
+var implStarts = map[lexer.T_Token]bool{
+	lexer.FUNC: true,
 }
 
 var (
@@ -870,6 +909,8 @@ var (
 		terminate: true, braceEnds: true, starts: stmtStarts}
 	topList = listOpts{sep: lexer.END, close: lexer.EOF,
 		terminate: true, braceEnds: true, starts: topStarts} // fn type impl import pub
+	implList = listOpts{sep: lexer.END, close: lexer.RBRACE,
+		terminate: true, braceEnds: true, starts: implStarts}
 )
 
 type listOpts struct {

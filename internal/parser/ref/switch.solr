@@ -1,4 +1,6 @@
-fn main() {
+import std::errors;
+
+fn main() -> Action! {
     switch a {
         1 => { return 1; }
         2 => { return 2; },
@@ -7,23 +9,25 @@ fn main() {
         1 => 2,
         2 => 3,
         _ => 4,
-    };
+    }
     return switch c {
         "hello" => "world",
         "world" => {
-            >> try list[0];
+            >> try list.pop();
         }
     }
-    return switch try args[0] {
+    var command = try args.pop() else {
+        return errors.ErrF("You need tp provide a command argument");
+    }
+    return switch command {
         "add" => {
-            var title = try args[1] else {
+            var title = try args.get(1) else {
                 return Err("you need to provide a title");
             };
             >> Ok(Action.Add(title=title));
         }
         "list" => Ok(Action.List),
         "exit" => Ok(Action.Exit),
-        None => Err("Command missing"),
-        _ => Err("invalid command"),
+        _ => errors.ErrF("Invalid command")
     }
 }
