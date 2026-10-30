@@ -630,17 +630,17 @@ func (e *EnumType) String() string {
 	)
 }
 
-type ObjectType struct {
+type StructType struct {
 	Token  lexer.Token
 	Fields []*Field
 }
 
-func (o *ObjectType) TokenLiteral() string { return o.Token.Literal }
-func (o *ObjectType) Pos() lexer.Position  { return o.Token.Position }
-func (o *ObjectType) typ()                 {}
-func (o *ObjectType) String() string {
+func (o *StructType) TokenLiteral() string { return o.Token.Literal }
+func (o *StructType) Pos() lexer.Position  { return o.Token.Position }
+func (o *StructType) typ()                 {}
+func (o *StructType) String() string {
 	return fmt.Sprintf(
-		"ObjectType (%s)",
+		"StructType(%s)",
 		sliceToString(o.Fields),
 	)
 }

@@ -1,18 +1,22 @@
 package analyzer
 
 import (
+	"fmt"
 	"stellar/internal/ast"
+	"strings"
 )
 
 type Type interface {
 	typ()
+	String() string
 }
 
 type PrimitiveType struct {
 	Id string
 }
 
-func (pt *PrimitiveType) typ() {}
+func (pt *PrimitiveType) typ()           {}
+func (pt *PrimitiveType) String() string { return pt.Id }
 
 var (
 	IntT     = &PrimitiveType{Id: "int"}
@@ -21,24 +25,52 @@ var (
 	BoolT    = &PrimitiveType{Id: "bool"}
 	InvalidT = &PrimitiveType{Id: "invalid"}
 	VoidT    = &PrimitiveType{Id: "void"}
+	NeverT   = &PrimitiveType{Id: "never"}
+	SelfT    = &PrimitiveType{Id: "self"}
+	LenT     = &BuiltInFunctionType{Name: "len"}
 )
+
+var ErrorT = &InterfaceType{
+	Name:        "Error",
+	MethodOrder: []string{"error"},
+	Methods: map[string]*FunctionType{
+		"error": &FunctionType{
+			Params:     []Param{Param{Name: "self", Type: SelfT}},
+			ReturnType: StrT,
+		},
+	},
+}
 
 type SliceType struct {
 	ElemType Type
 }
 
 func (st *SliceType) typ() {}
+func (st *SliceType) String() string {
+	return fmt.Sprintf("[]%s", st.ElemType.String())
+}
 
 type ResultType struct {
 	ValueType Type
 }
 
 func (rt *ResultType) typ() {}
+func (rt *ResultType) String() string {
+	return fmt.Sprintf("%s!", rt.ValueType.String())
+}
+
+type MaybeType struct {
+	ValueType Type
+}
+
+func (mt *MaybeType) typ() {}
+func (mt *MaybeType) String() string {
+	return fmt.Sprintf("%s?", mt.ValueType.String())
+}
 
 type Param struct {
-	Name  string
-	Type  Type
-	IsMut bool
+	Name string
+	Type Type
 }
 
 type FieldInfo struct {
@@ -59,28 +91,78 @@ type MethodInfo struct {
 	Node     *ast.FunctionStmt
 }
 
+type MethodSet struct {
+	order  []string
+	byName map[string]*MethodInfo
+}
+
+func (ms *MethodSet) Add(info *MethodInfo) bool {
+	if ms.byName == nil {
+		ms.byName = map[string]*MethodInfo{}
+	}
+	if _, ok := ms.byName[info.Name]; ok {
+		return false
+	}
+	ms.order = append(ms.order, info.Name)
+	ms.byName[info.Name] = info
+	return true
+}
+
+func (ms *MethodSet) Get(name string) *MethodInfo {
+	if mi, ok := ms.byName[name]; ok {
+		return mi
+	}
+	return nil
+}
+
+func (ms *MethodSet) All() []*MethodInfo {
+	var out []*MethodInfo
+	for _, name := range ms.order {
+		if mi, ok := ms.byName[name]; ok {
+			out = append(out, mi)
+		}
+	}
+	return out
+}
+
 type FunctionType struct {
 	Params     []Param
 	ReturnType Type
 }
 
 func (ft *FunctionType) typ() {}
+func (ft *FunctionType) String() string {
+	var paramTypes []string
+	for _, p := range ft.Params {
+		paramTypes = append(paramTypes, p.Type.String())
+	}
+	return fmt.Sprintf(
+		"fn(%s) -> %s",
+		strings.Join(paramTypes, ", "),
+		ft.ReturnType.String(),
+	)
 
-type ObjectType struct {
-	Name         string
-	Fields       []FieldInfo
-	MethodsOrder []string
-	Methods      map[string]*MethodInfo
 }
 
-func (ot *ObjectType) typ() {}
+type StructType struct {
+	Name    string
+	Fields  []FieldInfo
+	Methods MethodSet
+}
+
+func (st *StructType) typ() {}
+func (st *StructType) String() string {
+	return st.Name
+}
 
 type EnumType struct {
 	Name    string
 	Members []MemberInfo
+	Methods MethodSet
 }
 
-func (et *EnumType) typ() {}
+func (et *EnumType) typ()           {}
+func (et *EnumType) String() string { return et.Name }
 
 type InterfaceType struct {
 	Name        string
@@ -88,16 +170,23 @@ type InterfaceType struct {
 	Methods     map[string]*FunctionType
 }
 
-func (it *InterfaceType) typ() {}
+func (it *InterfaceType) typ()           {}
+func (it *InterfaceType) String() string { return it.Name }
 
 type TypeParamType struct {
 	Name string
 }
 
+type BuiltInFunctionType struct {
+	Name string
+}
+
+func (bift *BuiltInFunctionType) typ() {}
+func (bift *BuiltInFunctionType) String() string {
+	return fmt.Sprintf("builtin %s", bift.Name)
+}
+
 func identicalParam(a, b Param) bool {
-	if a.IsMut != b.IsMut {
-		return false
-	}
 	if !identical(a.Type, b.Type) {
 		return false
 	}
@@ -127,9 +216,13 @@ func identical(a, b Type) bool {
 		if !ok {
 			return false
 		}
-		if a_T.ValueType != nil {
-			return identical(a_T.ValueType, b_T.ValueType)
+		return identical(a_T.ValueType, b_T.ValueType)
+	case *MaybeType:
+		b_T, ok := b.(*MaybeType)
+		if !ok {
+			return false
 		}
+		return identical(a_T.ValueType, b_T.ValueType)
 	case *SliceType:
 		b_T, ok := b.(*SliceType)
 		if !ok {
@@ -147,8 +240,8 @@ func identical(a, b Type) bool {
 		if !ok {
 			return false
 		}
-		return a_T.Id == b_T.Id
-	case *ObjectType, *EnumType, *InterfaceType:
+		return a_T == b_T
+	case *StructType, *EnumType, *InterfaceType, *BuiltInFunctionType:
 		return a == b
 	}
 	return false

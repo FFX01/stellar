@@ -9,7 +9,7 @@ var my_var_3 = 1
 
 var float_test = 1.5
 
-type Item object {
+type Item struct {
     name: str
     age: int
 }

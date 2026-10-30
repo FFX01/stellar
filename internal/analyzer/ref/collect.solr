@@ -1,0 +1,6 @@
+import std::fmt;
+
+var x = 1;
+var x = 1;
+type x struct {}
+fn int() {}

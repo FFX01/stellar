@@ -1,7 +1,7 @@
 type Handler = fn(Event) -> Action?;
 type Handler2[T] = fn(e: Event, v: T) -> Action[T]?;
 
-pub type Store[Tkey, Tvalue] object {
+pub type Store[Tkey, Tvalue] struct {
     pub key: Tkey,
     pub value: Tvalue,
 }

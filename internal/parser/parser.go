@@ -63,6 +63,8 @@ type Parser struct {
 	infixFuncs  map[lexer.T_Token]infixParseFunc
 }
 
+func (p *Parser) HasErrors() bool { return len(p.errors) > 0 }
+
 func (p *Parser) PrintErrors() {
 	for _, e := range p.errors {
 		fmt.Println(e.String())
@@ -512,9 +514,9 @@ func (p *Parser) parseInterfaceType() ast.Type {
 	return n
 }
 
-func (p *Parser) parseObjectType() ast.Type {
-	tok := p.expect(lexer.OBJ)
-	n := &ast.ObjectType{Token: tok}
+func (p *Parser) parseStructType() ast.Type {
+	tok := p.expect(lexer.STRUCT)
+	n := &ast.StructType{Token: tok}
 	p.expect(lexer.LBRACE)
 	n.Fields = parseList(p, braceList, p.parseField)
 	return n
@@ -852,8 +854,8 @@ func (p *Parser) parseTypeDecl(pub bool) ast.Statement {
 			TypeParams: parameters,
 		}
 		switch p.cur().Type {
-		case lexer.OBJ:
-			n.Definition = p.parseObjectType()
+		case lexer.STRUCT:
+			n.Definition = p.parseStructType()
 		case lexer.ENUM:
 			n.Definition = p.parseEnumType()
 		case lexer.INTERFACE:

@@ -1,7 +1,7 @@
 import std::errors;
 import std::log;
 
-type State object {
+type State struct {
     todos: []Todo
 }
 impl State {
@@ -13,7 +13,7 @@ impl State {
     }
 }
 
-type Todo object {
+type Todo struct {
     id: int,
     title: str,
     status: Status

@@ -67,7 +67,7 @@ const (
 	PUB          T_Token = "PUB"
 	INTERFACE    T_Token = "INTERFACE"
 	ENUM         T_Token = "ENUM"
-	OBJ          T_Token = "OBJ"
+	STRUCT       T_Token = "STRUCT"
 	AND          T_Token = "AND"
 	OR           T_Token = "OR"
 	TRUE         T_Token = "TRUE"
@@ -104,7 +104,7 @@ var keywords = map[string]T_Token{
 	"pub":       PUB,
 	"interface": INTERFACE,
 	"enum":      ENUM,
-	"object":    OBJ,
+	"struct":    STRUCT,
 	"and":       AND,
 	"or":        OR,
 	"true":      TRUE,

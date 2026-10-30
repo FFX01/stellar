@@ -73,8 +73,10 @@ An identifier starts with an ASCII letter or `_`, followed by letters, digits, o
 `_` alone is an identifier, used by convention for "ignore this".
 
 Built-in type names such as `int`, `str`, `bool`, `float`, and `void` are **not keywords**.
-They are ordinary identifiers that the checker resolves in type position. A user can't
-declare a type with the name of a built-in type in the same scope.
+They are ordinary identifiers that the checker resolves in type position. **Built-in names
+can't be redeclared or shadowed anywhere**: not as a type, function, variable, parameter, or
+loop binding. This covers the built-in types, `Error`, and the built-in functions (`len`).
+Struct fields and enum variants aren't declarations in a scope, so a field may be named `str`.
 
 Naming convention **[provisional]**: built-in primitive types are lower case (`int`, `str`).
 Every other type, built-in or user-defined, is `PascalCase` (`Result`, `Maybe`, `Error`,
@@ -83,7 +85,7 @@ Every other type, built-in or user-defined, is `PascalCase` (`Result`, `Maybe`, 
 ### 2.3 Keywords
 ```
 if  else  switch  for  in  break  continue  return
-var  mut  fn  type  impl  object  enum  interface  pub  import
+var  mut  fn  type  impl  struct  enum  interface  pub  import
 try  must  and  or  true  false  Ok  Err  Some  None
 ```
 `Ok` and `Err` are keywords because they are constructors of the built-in `Result` type, and
@@ -150,9 +152,9 @@ A type is introduced with `type`. After the name, and an optional type-parameter
 four forms is allowed:
 
 ```solr
-type Point object { pub x: int, pub y: int }          // object (a record)
+type Point struct { pub x: int, pub y: int }          // a record
 type Dir enum { North, South, East, West }            // enum (a tagged union)
-type Named interface { fn name(self: Point) -> str }  // interface
+type Named interface { fn name(self) -> str }         // interface
 type Handler = fn(int) -> bool;                       // alias
 ```
 
@@ -167,10 +169,10 @@ type `[]T` where `T` is the type of its elements, or the declared type if there 
 Fixed-length arrays `[N]T` are **[not implemented]**. Their length is an integer literal
 and is part of the type. They are **[provisional]**.
 
-### 3.4 Objects
-An object is a record of named fields.
+### 3.4 Structs
+A struct is a record of named fields.
 ```solr
-type Todo object {
+type Todo struct {
     pub id: int,
     pub title: str,
     status: Status        // private field
@@ -209,25 +211,28 @@ Tuples are fixed-size, immutable, and may hold different types. The type syntax 
 ### 3.7 Interfaces
 ```solr
 type Shape interface {
-    fn area(self: Self) -> float
-    fn name(self: Self) -> str
+    fn area(self) -> float
+    fn name(self) -> str
 }
 ```
 - An interface is a list of method signatures, with no bodies and no separators.
 - **Structural:** a type satisfies an interface by having methods with these names and
   signatures. There is no `implements` declaration, and the consumer declares the interface.
 - Interface methods are always public, so `pub` is not allowed on them.
-- `Self` stands for the implementing type **[working]**. Whether `self` is written with or
-  without a type in a signature is **[open]**.
+- Every interface method takes `self`, written without a type (§4.3).
+- There is no `Self` type. A method that needs "the same type as the receiver" for another
+  parameter or the result (equality, ordering) belongs in a generic interface, such as
+  `type Eq[T] interface { fn equals(self, other: T) -> bool }`, which `Rect` satisfies as
+  `Eq[Rect]`. Generic interfaces are part of the generics work (§3.8).
 - Whether the checker also requires `pub` on the implementing methods is **[open]**.
 
 ### 3.8 Generics
 Type parameters are listed in square brackets after the name:
 ```solr
-type Pair[A, B] object { pub first: A, pub second: B }
+type Pair[A, B] struct { pub first: A, pub second: B }
 fn first[T](xs: []T) -> T!: xs.get(0);
 ```
-- They apply to objects, enums, interfaces, aliases, and functions.
+- They apply to structs, enums, interfaces, aliases, and functions.
 - Type arguments at a call are **inferred**. There is no explicit-argument syntax in
   expressions, because `[` after an expression always means indexing.
 - Constraints: `[T, E, S: Iterable[E]]` **[provisional]**.
@@ -244,7 +249,7 @@ Two types are the same type when:
 - both are the same built-in type;
 - both are slices, results, or maybes of the same element type;
 - both are function types with the same parameter types and return type;
-- both are the **same declaration** (an object, enum, or interface is identified by its
+- both are the **same declaration** (a struct, enum, or interface is identified by its
   declaration, not by its shape).
 
 ---
@@ -270,6 +275,9 @@ pub fn inc(x: int) -> int: x + 1;       // expression body
 - **Parameter types are required**, and so is the return type unless the function returns
   `void`. The parser accepts the omission, and the checker reports it.
 - Parameters are **never mutable**. `fn f(x: mut T)` is an error.
+- A function whose return type isn't `void` must return a value on every path. A block body
+  that can reach its closing `}` is a "missing return" error. A `for` with no condition and no
+  `break` counts as never finishing (§6.11).
 - A function body is a block with `return`, or `: expression;`.
 - A function expression (a lambda) is written the same way, with no name:
   `fn(x: int) -> int: x + 1`. Its type comes from its signature.
@@ -279,20 +287,23 @@ pub fn inc(x: int) -> int: x + 1;       // expression body
 Methods are defined in `impl` blocks:
 ```solr
 impl Point {
-    pub fn add(self: Point, other: Point) -> Point {
+    pub fn add(self, other: Point) -> Point {
         return Point(x=self.x + other.x, y=self.y + other.y);
     }
 }
 ```
-- `self` is an ordinary first parameter. A method **can't change its receiver**. A method that
+- A method's first parameter is `self`, **written without a type**: the `impl` block already
+  names the receiver's type, and inside an interface it is the implementing type.
+  `self: Point` is an error, and so is `self` anywhere but the first parameter of a method.
+  Otherwise `self` behaves like an ordinary parameter. A method **can't change its receiver**. A method that
   "changes" a value returns a new one.
 - `impl` can appear anywhere at the top level. Several `impl` blocks for one type are allowed.
 - Methods follow the same terminator rule as top-level functions (§7.1). A method with a block
   body needs nothing after its `}`. A method with an expression body ends with `;`:
   ```solr
   impl Point {
-      pub fn sum(self: Point) -> int: self.x + self.y;
-      pub fn origin(self: Point) -> bool { return self.x == 0 and self.y == 0; }
+      pub fn sum(self) -> int: self.x + self.y;
+      pub fn origin(self) -> bool { return self.x == 0 and self.y == 0; }
   }
   ```
 - The target may carry type arguments (`impl Pair[A, B] { ... }`). It parses, but what it means
@@ -310,7 +321,9 @@ mut xs: []int = [];
 ```
 - An initializer is **required**. `var x: int;` is an error.
 - The annotation is optional. When present, the initializer must match it.
-- A name can be declared once per scope. An inner scope may shadow an outer name.
+- A name can be declared once per scope. An inner scope may shadow an outer name, except a
+  built-in name (§2.2). A function's parameters and the top level of its body are one scope,
+  so `fn f(x: int) { var x = 1; }` is a redeclaration.
 - Names are introduced **after** their initializer, so `var x = x + 1;` refers to an outer `x`.
 
 ### 4.5 Imports
@@ -379,6 +392,12 @@ fn rename(todo: Todo, title: str) -> Todo {
 - `@x` is valid **only as the initializer of a binding**: `mut t = @x;` or `var t = @x;`.
 - `mut t = x;` (no `@`) is an error. A mutable binding must show where the copy is made.
   `var t = @x;` is allowed, though it has no use.
+- A `mut` initializer must be a **fresh value**: `@x`, a literal, a sequence literal, a
+  call or construction, `Ok`/`Err`/`Some`/`None`, an operator expression, or a function
+  literal. `if`, `switch`, and blocks are fresh when every branch is. `try e` and `must e`
+  are fresh when `e` is. A variable, a field (`a.b`), an element (`a[i]`), and a **slice**
+  (`xs[a:b]`) are not fresh, so `mut t = xs[a:b];` is an error. Write `mut t = @xs[a:b];`.
+  `var t = xs[a:b];` is fine.
 - There is no implicit form such as `@todo.name = name`.
 - The same function can be written without `mut`:
   `return todo.with(title=title);`
@@ -407,6 +426,7 @@ fn main() {
     second.title = "b";               // error: `second` is not mutable; declare it with `mut`
 
     mut third = first;                // error: use `@` to make a mutable copy
+    mut part = xs[1:3];               // error: a slice isn't a fresh value either
     mut fourth = @first;              // ok
     fourth.title = "c";               // ok, changes only `fourth`
 
@@ -457,7 +477,7 @@ The `else` part of `try` is the exception: its value extends as far right as pos
 Literals are in §2.4. An identifier names a variable, function, or type. `(e)` groups.
 
 ### 6.3 Calls
-`f(a, b)`, or with names `f(x=a, y=b)`. Named arguments are required when constructing objects
+`f(a, b)`, or with names `f(x=a, y=b)`. Named arguments are required when constructing structs
 and enum variants. For ordinary functions, whether names are allowed is **[open]**.
 A trailing comma is allowed. A call whose callee is a type is a construction (§3.4) or a
 conversion (§9.3).
@@ -476,6 +496,7 @@ Typing rules are in §9.
 - `xs[i]` reads an element. An out-of-range index **panics**. `xs.get(i)` returns `T!`.
 - `xs[a:b]`, `xs[:b]`, `xs[a:]` take a sub-sequence, and also work on `str`.
   The result is a value, as always. An implementation may share storage with the original.
+  A slice can initialize a `var`, but not a `mut` (§5.3).
 - Indexing a `str` gives a one-character `str`.
 
 ### 6.8 Blocks and yield
@@ -491,6 +512,8 @@ var label = {
   statement, `x` is discarded, and does not leave the outer block. This is easy to get wrong.
 - A block with no `>>` has the type `void`.
 - `return` leaves the enclosing **function**, not the block.
+- `>>` is only valid inside a block that is used as a value (an `if`, `switch`, or `try`
+  branch, or a bare block). A `>>` directly in a function body is an error: use `return`.
 
 ### 6.9 `if`
 ```solr
@@ -546,6 +569,9 @@ for { if done { break; } }                               // loop until `break`
 ```
 - The index binding is required in the first form: `for _, x in xs`.
 - Loop bindings are copies of the element. They are immutable.
+- Like a function's parameters, the loop bindings and the top level of the loop body are one
+  scope, so `for _, x in xs { var x = 1; }` is a redeclaration. The same holds for the error
+  binding of `try … else |err| { }` (§8.3).
 - Iterating over a `mut` variable iterates over a copy taken at the start of the loop, so
   changing the variable in the body doesn't affect the iteration.
 - A `for` used as a value collects each `>>` in its body into a slice (a comprehension):
@@ -594,7 +620,7 @@ Line breaks have no meaning.
 | Return | `return;` or `return expr;` |
 | Yield | `>> expr;` |
 | Break, continue | `break;` `continue;` |
-| Expression | `expr;` (a call, `if`, `for`, `switch`, or block) |
+| Expression | `expr;` (a call, `if`, `for`, `switch`, a block, or `try`/`must` of a call) |
 
 An assignment target is a variable, a field, or an element. Assigning to the variable itself
 rebinds it. Assigning to a field or element changes contents and needs `mut` (§5.1).
@@ -606,21 +632,27 @@ rebinds it. Assigning to a field or element changes contents and needs `mut` (§
 ### 8.1 `Result`
 `Result[T]`, written `T!`, is either `Ok(value)` or `Err(error)`, where `error` implements
 `Error`. It is used when an operation can **fail with a reason**. `void!` is a result with no
-payload: `Ok()`, `Err(e)`.
+payload: `Ok()`, `Err(e)`. A bare `Result`, with no type argument, means `Result[void]`, so
+`fn save() -> Result` and `fn save() -> void!` are the same. `Maybe` always needs its type
+argument.
 ```solr
 fn parseAge(s: str) -> int! {
     if s == "" { return Err(Error("empty input")); }
     return Ok(42);
 }
 ```
-`Error("message")` creates a generic error **[provisional]**. A user type may implement the
-`Error` interface.
+`Error` is a built-in interface with one method:
+```solr
+type Error interface { fn error(self) -> str }
+```
+`Error("message")` creates a generic error **[provisional]**. A user type implements `Error`
+by having a method `fn error(self) -> str` in its `impl`.
 
 ### 8.2 `Maybe`
 `Maybe[T]`, written `T?`, is either `Some(value)` or `None()`. It is used when a value may
 **legitimately be absent**:
 ```solr
-type Profile object {
+type Profile struct {
     pub name: str,
     pub email: str?              // may be absent. Defaults to None().
 }
@@ -678,7 +710,7 @@ Operand types must be the same. There is no implicit conversion.
 
 - `1 + 1.0` and `7.0 / 2` are errors. Write `7.0 / 2.0`.
 - `==` between different types is a **compile error**, not `false`.
-- Comparing objects and enums with `==` is **[open]**.
+- Comparing structs and enums with `==` is **[open]**.
 - The order of `str` values (bytes or code points) is **[open]**.
 
 ### 9.2 Division and remainder
@@ -733,9 +765,9 @@ All of it is **[provisional]**.
 
 `pop` on a `mut` slice (in place, or returning a pair) is **[open]**.
 
-### 10.3 Objects
+### 10.3 Structs
 `x.with(field=value, ...)` returns a copy with the fields replaced. It is built in for every
-object and enum variant. Its arguments are checked against the field names and types.
+struct and enum variant. Its arguments are checked against the field names and types.
 
 ### 10.4 Modules
 `std::fmt`, `std::log`, `std::errors`, and `std::io` appear in the reference programs. Their
@@ -746,7 +778,7 @@ contents are **[open]**.
 ## 11. Modules and visibility
 
 - Everything is private to its module unless it is marked `pub`.
-- `pub` applies to: top-level `fn`, `type`, and `var`; methods in an `impl`; and object fields.
+- `pub` applies to: top-level `fn`, `type`, and `var`; methods in an `impl`; and struct fields.
 - Interface methods are always public.
 - Whether enum variants share their type's visibility, and whether a module is a file or a
   directory, are **[open]**.
@@ -778,12 +810,12 @@ topItem      = importDecl | [ 'pub' ] ( fnDecl | typeDecl | varDecl ) | implDecl
 importDecl   = 'import' ident { '::' ident } ';' ;
 varDecl      = 'var' ident [ ':' type ] '=' expr ';' ;
 fnDecl       = 'fn' ident [ typeParams ] '(' list(param) ')' [ '->' type ] ( block | ':' expr ';' ) ;
-param        = ident ':' type ;
+param        = ident ':' type | 'self' ;      (* `self` only first, in a method or interface *)
 typeParams   = '[' list(ident [ ':' type ]) ']' ;
 implDecl     = 'impl' type '{' { [ 'pub' ] fnDecl } '}' ;
 
 typeDecl     = 'type' ident [ typeParams ] ( '=' type ';'
-                                           | 'object' '{' list(field) '}'
+                                           | 'struct' '{' list(field) '}'
                                            | 'enum' '{' list(variant) '}'
                                            | 'interface' '{' { 'fn' sig } '}' ) ;
 field        = [ 'pub' ] ident ':' type ;
@@ -843,13 +875,13 @@ reports the other errors in that block.
 ```solr
 type Status enum { Open, Done }
 
-type Todo object {
+type Todo struct {
     pub id: int,
     pub title: str,
     pub status: Status
 }
 
-type State object {
+type State struct {
     pub todos: []Todo
 }
 
@@ -885,23 +917,23 @@ fn main() {
 }
 ```
 
-### 14.2 Objects, methods, and interfaces
+### 14.2 Structs, methods, and interfaces
 ```solr
 type Shape interface {
-    fn area(self: Self) -> float
+    fn area(self) -> float
 }
 
-type Rect object { pub w: float, pub h: float }
-type Circle object { pub r: float }
+type Rect struct { pub w: float, pub h: float }
+type Circle struct { pub r: float }
 
 impl Rect {
-    pub fn area(self: Rect) -> float {
+    pub fn area(self) -> float {
         return self.w * self.h;
     }
 }
 
 impl Circle {
-    pub fn area(self: Circle) -> float {
+    pub fn area(self) -> float {
         return 3.14159 * self.r * self.r;
     }
 }
@@ -998,7 +1030,7 @@ fn main() {
 ```solr
 type Kind enum { Plus, Minus, Int, Eof, Illegal }
 
-type Token object {
+type Token struct {
     pub kind: Kind,
     pub lit: str
 }
@@ -1059,16 +1091,12 @@ parser change, must reject or fix these:
 
 | Input | Behavior now | Spec |
 |---|---|---|
-| `must f() + 1` | parses as `must (f() + 1)` (the operand is parsed at the lowest precedence) | `(must f()) + 1`, like `try` (§6.1) |
-| `Some(1).x`, `Some(1) + 2` | parse as `Some((1).x)` and `Some(1 + 2)`: `Some` takes any expression to its right | `(Some(1)).x`, `(Some(1)) + 2` |
-| `Some 1` (no parentheses) | accepted | an error |
-| `None` (bare), `None(1)` | `None` alone is accepted, and `None()` parses as a call whose callee is `None`. `None(1)` is accepted too | `None()` is a constructor and takes no argument |
 | `Err()` | accepted | `Err` needs a value (§8.1) |
 | `a:b`, `xs[a:b:c]` | `:` is a general infix operator, accepted anywhere an expression is | only `xs[a:b]`, `xs[:b]`, `xs[a:]` inside `[ ]` (§6.7) |
 | `fn f();` | a function with no body is accepted | a body is required (§4.2) |
 | `fn f(x) {}` | a parameter with no type is accepted | types are required (§4.2) |
 | `pub impl A {}`, `pub import a;`, `pub var x = 1;` inside a function | accepted | `pub` applies to `fn`, `type`, and top-level `var` (§11) |
-| `1 + 2;` as a statement | accepted | expression statements are calls, `if`, `for`, `switch`, and blocks (§7.2) |
+| `1 + 2;` as a statement | accepted | expression statements are calls, `if`, `for`, `switch`, blocks, and `try`/`must` of a call (§7.2) |
 
 **Enforced by the checker, not the parser.** The rules in this document that are written as an
 error: types and conversions, mutability, `@x` only as a binding initializer, `mut x = y` without
@@ -1089,14 +1117,16 @@ Consolidated from the markers above.
 
 **Values and mutability**
 - Can a parameter be rebound inside its function?
-- Do omitted object fields follow §3.4? Will per-field defaults be added?
+- Do omitted struct fields follow §3.4? Will per-field defaults be added?
 - A `ref` type for shared mutable state, if ever.
 
 **Types**
 - Tuple syntax, element access, destructuring.
 - `Maybe` vs `Result`: which absences are which?
-- Constraint syntax for generics. Is `self` written with or without a type?
-- Equality of objects and enums (`==`).
+- Constraint syntax for generics.
+- Equality of structs and enums (`==`).
+- Is a struct that contains itself directly (`type N struct { next: N }`, with no `?` or slice
+  in between) an error? It can never be constructed.
 - Map type and literal syntax. Fixed-length arrays.
 
 **Syntax**

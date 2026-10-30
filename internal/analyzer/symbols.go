@@ -12,7 +12,7 @@ const (
 
 type symbolBase struct {
 	Name     string
-	Node     *ast.Node
+	Node     ast.Node
 	Type     Type
 	State    ResolveState
 	IsPublic bool
@@ -24,17 +24,17 @@ type Symbol interface {
 	base() *symbolBase
 }
 
+// VarStmt, Parameter, bindings in for in/try else: store ForInExpr/TryExpr
 type VarSymbol struct {
 	symbolBase
 	IsMut bool
 }
 
+// ast.FunctionStmt
 type FuncSymbol struct{ symbolBase }
-type ObjectSymbol struct{ symbolBase }
-type ModuleSymbol struct{ symbolBase }
 
-type Scope struct {
-	Parent   *Scope
-	Children []*Scope
-	Symbols  map[string]Symbol
-}
+// TypeDeclStmt, TypeAliasStmt
+type TypeSymbol struct{ symbolBase }
+
+// ImportStmt
+type ModuleSymbol struct{ symbolBase }

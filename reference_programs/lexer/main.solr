@@ -7,7 +7,7 @@
 // - A value passed to a scope that expects a mutable ref must explcititly declare the
 //   the value mutable when passed. 
 // - A scope must own a value in order to pass a mtable reference to it.
-type Lexer object {
+type Lexer struct {
     pub input: str,
     pub pos: int
 }
@@ -39,7 +39,7 @@ type Kind enum {
     Illegal
 }
 
-type Token object {
+type Token struct {
     pub kind: Kind,
     pub lit: str
 }

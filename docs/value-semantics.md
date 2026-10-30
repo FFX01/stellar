@@ -97,9 +97,9 @@ Markers:
   - a trailing `>>` in such an arm or block
 - **[working] Slices and string slices are views** sharing storage with the original.
 
-## 3. Types and objects
+## 3. Types and structs
 
-- **[working]** Objects hold data, and `impl` blocks hold methods. A method takes
+- **[working]** Structs hold data, and `impl` blocks hold methods. A method takes
   `self` and can't change it. A method that "changes" a value returns a new one.
 - **[working]** Interfaces are **structural** (Go-style): a type satisfies an
   interface by having the methods. There is no `impl Interface for Type`, and the
@@ -122,8 +122,8 @@ Markers:
   of `Maybe`.
 - **[decided]** Primitives and built-in containers have real zero values: `0`, `0.0`,
   `""`, `false`, and the empty slice or map.
-- **[working]** Omitting an argument when constructing an object: a field of primitive
-  or container type takes its zero value. A field of an object type that isn't a
+- **[working]** Omitting an argument when constructing a struct: a field of primitive
+  or container type takes its zero value. A field of a struct type that isn't a
   `Maybe` must be given, so `State(item=Item())` is valid and `State()` is not when
   `item: Item`. Per-field defaults may be added later.
 - **[open]** Which kinds of absence use `Maybe` and which use `Result`. `xs.get(i)` is

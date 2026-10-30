@@ -21,7 +21,7 @@ Source of truth for this iteration: `reference_programs/todo-cli/main.st`.
 
 - Primitive/builtin types (`int`, `str`, `bool`, `float`, …) are **not keywords** and get **no special token type** — they are lexed as plain `IDENT`, exactly like user-defined types (`Todo`, `APIError`). This keeps builtins and user types uniform at the lexer level.
 - Builtin *types* are resolved by the **checker** in type position, via a pre-seeded **type namespace** that is separate from the **value namespace** (so `int` as a type and `int` as a variable do not collide).
-- Keywords reserved by the lexer: `fn`, `type`, `pub`, `return`, `if`, `else`, `match`, `for`, `loop`, `in`, `new`, `try`, `as`, `impl`, `interface`, `enum`, `object`, `implements`, and operators/punctuation (`->`, `=>`, `|`, `[`, `]`, `(`, `)`, `+`, `==`, `!=`, `<=`, `>=`, `!`, …).
+- Keywords reserved by the lexer: `fn`, `type`, `pub`, `return`, `if`, `else`, `match`, `for`, `loop`, `in`, `new`, `try`, `as`, `impl`, `interface`, `enum`, `struct`, `implements`, and operators/punctuation (`->`, `=>`, `|`, `[`, `]`, `(`, `)`, `+`, `==`, `!=`, `<=`, `>=`, `!`, …).
 - Reserved-name polish (e.g. forbidding `var int = 5`) is deferred to the checker if desired.
 - Casing convention (#100, lowercase = primitive/value, PascalCase = type) is a *checker enforcement* rule, not a lexer token distinction.
 
@@ -87,7 +87,7 @@ Source of truth for this iteration: `reference_programs/todo-cli/main.st`.
 
 ## 6. Type-constructor keywords [resolved]
 
-- `object`, `enum`, `interface`, `implements` are keywords. They are **type constructors**
+- `struct`, `enum`, `interface`, `implements` are keywords. They are **type constructors**
   (metatypes — they build types), not types, so the lexer must recognize them to parse
   what *kind* of type is being declared. Same rationale as `fn`/`type`.
 
@@ -128,7 +128,7 @@ Source of truth for this iteration: `reference_programs/todo-cli/main.st`.
 - `Error` stores its message (storage model TBD).
 - Interfaces: `type Name interface { fn ... }`; `impl Intf for T { ... }`.
 - Enums: `pub type S enum { Variant | DataVar(payload) }`.
-- Objects: `pub type T object { field: type }`.
+- Structs: `pub type T struct { field: type }`.
 - `pub` = exported type.
 - String interpolation: `f"{expr}"`.
 - Builtins: `len`, `append`, `print`, `os.exit`.
