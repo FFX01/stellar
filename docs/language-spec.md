@@ -6,7 +6,7 @@
 >
 > **Authority.** Where this document disagrees with `docs/design.md` or
 > `docs/value-semantics.md`, this document wins. Those two files are kept as the record of
-> how each decision was reached. `docs/analyzer-plan.md` describes how the checker is built.
+> how each decision was reached.
 >
 > **How to read the markers.** Every rule that isn't settled is marked.
 >
@@ -478,7 +478,13 @@ Literals are in §2.4. An identifier names a variable, function, or type. `(e)` 
 
 ### 6.3 Calls
 `f(a, b)`, or with names `f(x=a, y=b)`. Named arguments are required when constructing structs
-and enum variants. For ordinary functions, whether names are allowed is **[open]**.
+and enum variants. Ordinary functions accept positional arguments, named arguments, or both:
+- Positional arguments fill the parameters in order. Named arguments fill the parameter with
+  that name.
+- Named arguments can never come before positional arguments: for `fn add(a: int, b: int)`,
+  `add(1, b=2)` is allowed and `add(a=1, 2)` is an error.
+- Every parameter must be given exactly once. A name that isn't a parameter, or a parameter
+  given twice (`add(1, a=2)`), is an error.
 A trailing comma is allowed. A call whose callee is a type is a construction (§3.4) or a
 conversion (§9.3).
 
@@ -1073,7 +1079,7 @@ This version keeps the whole loop in one function, so `tokens` and `pos` are `mu
 
 ## 15. Implementation status
 
-The lexer and parser are ahead of the checker, which is being built (`docs/analyzer-plan.md`).
+The lexer and parser are ahead of the checker, which is being built (`internal/analyzer`).
 As of 2026-10-28 they implement everything in this document except the items below.
 
 **Not implemented:**
@@ -1130,7 +1136,7 @@ Consolidated from the markers above.
 - Map type and literal syntax. Fixed-length arrays.
 
 **Syntax**
-- Named arguments for ordinary functions. Calling a function stored in a field.
+- Calling a function stored in a field.
 - `switch`: field binding in the case, `is`, and several values per arm (`1 | 2 =>`).
 - Format strings and interpolation. The exact escape set.
 - Static functions (`Type.fn`). Whether a module is a file or a directory.

@@ -1,0 +1,48 @@
+Scope crossing vs mutability
+
+ You're right that they're different things. In the spec, whether an expression can be made
+ mutable has nothing to do with scopes.
+
+ mut x = e is checked on the expression itself. §5.3 says the initializer must be a fresh
+ value:
+ - Fresh: @x, a literal, a sequence literal, a call or construction, Ok/Err/Some/None, an
+   operator expression, or a function literal.
+ - Fresh when their parts are: if/switch/blocks when every branch is fresh, and try e/must e
+   when e is.
+ - Not fresh: a variable, a field, an element, or a slice.
+
+ Applied to your example:
+ - mut s = @myStruct is fresh because of @. Where myStruct lives doesn't matter.
+ - mut innerInt = myInt + 1 is fresh because it's an operator expression.
+ - mut t = local is an error even if local was declared one line earlier in the same function.
+
+ None of these needs crossed. It's an isFresh(e ast.Expression) bool check on the syntax, run
+ when you check a mut statement.
+
+ Function boundaries matter for a different rule: what can be changed or rebound.
+ - §5.1: changing contents (s.name = ..., push, +=) needs the root variable of the assignment
+   target to be a mut declared in the current function.
+ - §5.4: a closure can't change or rebind a parent function's variables.
+
+ That's a question about the target's symbol (IsMut, plus which function declared it), not
+ about an expression's type. crossed doesn't fit here either. lookup sets it for any parent
+ scope, but §5.1 says blocks are not boundaries, only functions and closures are. So a mut
+ declared outside an if and changed inside it would wrongly count as crossed. You'd want each
+ local to record its declaring function (or each scope to record whether it's a function or a
+ block), and compare that with the function being checked.
+
+ Do it in pass 3, not a fourth pass. Both checks need the local scopes and the "current
+ function" state, and those only exist while pass 3 walks a body, since locals are declared in
+ order. A separate pass would have to rebuild the scopes, or pass 3 would have to record every
+ name it resolved. Instead:
+ - check isFresh in pass 3's VarStmt case when IsMut is set;
+ - in the assignment case, find the root variable of the target and check IsMut and the
+   declaring function;
+ - drop the bool from inferExprType so it only returns a type;
+ - for top-level variables, keep the separate rule that top-level mut is always an error
+   (§5.1). Your resolveVarSymbol currently ties that to crossed.
+
+ Also visible in the dump: self shows as <unresolved> in method signatures. §3.6 (and memory
+ note #203) say self is written without a type and takes the impl target's type. So resolveImpl
+  should set Params[0].Type to the struct or enum, and the interface case should use a Self
+ placeholder.

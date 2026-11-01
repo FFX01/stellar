@@ -39,19 +39,12 @@ func main() {
 	}
 
 	a := analyzer.Run(program)
-	if i, crossed := a.Package.Lookup("int"); i != nil {
-		fmt.Println("Found int")
-		fmt.Println("crossed: ", crossed)
-	}
-	if i := a.Package.LookupLocal("int"); i != nil {
-		fmt.Println("Found int in local. this is a problem")
-	}
 	file, err := os.Create("log.txt")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer file.Close()
-	writer := bufio.NewWriter(file)
-	a.Dump(writer)
+	writer := bufio.NewWriter(os.Stdout)
+	analyzer.Dump(writer, a)
 	writer.Flush()
 }

@@ -1,0 +1,25 @@
+type State struct {
+    todos: []Todo,
+    count: int
+}
+impl State {
+    fn string(self) -> str: "State";
+    fn addTodo(self, name: str) -> State {
+        var t = Todo(name=name);
+        return self.with(todos=[...self.todos, t]);
+    }
+}
+
+type Todo struct {
+    pub name: str,
+    pub status: Status
+}
+
+type Status enum {
+    InProgress,
+    Done(when: str)
+}
+
+type Stringable interface {
+    fn string(self) -> str
+}

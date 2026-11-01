@@ -1,0 +1,43 @@
+type State struct {
+    pub name: str,
+    item: Item
+}
+impl State {
+    fn name(self) -> str {
+        return self.name;
+    }
+    fn item(self) -> Item: self.item;
+}
+
+type Item struct {
+    age: int
+}
+
+fn add(a: int, b: int) -> int: a + b;
+
+var intLiteral: int = 1;
+
+var callExpr: int = add(1, 2);
+
+var typeCall: State = State(name="abc", item=Item());
+
+var binaryExpr: int = 1 + 2;
+
+var strLiteral: str = "hello";
+
+var boolLiteral: bool = true;
+
+var floatLiteral: float = 1.2;
+
+var arg1: int = 1;
+var arg2: int = 2;
+
+var fullyResolvedCall: int = add(arg1, b=arg2) + 2;
+
+var namedArgs: int = add(b=1, a=2);
+
+var typedCall2 = State(item=Item(), name="abc");
+
+var itemAge = typeCall.item.age;
+
+var stateName = typedCall2.name(1, 2);
