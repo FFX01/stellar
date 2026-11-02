@@ -1,0 +1,10 @@
+var forwardRef: State = State(item=Item());
+
+type State struct {
+    name: str,
+    item: Item
+}
+
+type Item struct {
+    value: int
+}

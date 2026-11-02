@@ -5,7 +5,7 @@ type State struct {
 impl State {
     fn string(self) -> str: "State";
     fn addTodo(self, name: str) -> State {
-        var t = Todo(name=name);
+        var t = Todo(name=name, status=Status.InProgress);
         return self.with(todos=[...self.todos, t]);
     }
 }
@@ -20,6 +20,20 @@ type Status enum {
     Done(when: str)
 }
 
+type Action enum {
+    Add(title: str)
+}
+
 type Stringable interface {
     fn string(self) -> str
 }
+
+var s = State();
+
+fn update(state: State, action: Action) -> State {
+    return switch action {
+        Action.Add => state.addTodo(action.name)
+    }
+}
+
+var s2: State = update(s, Action.Add(title="new"));

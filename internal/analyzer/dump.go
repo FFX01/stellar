@@ -207,7 +207,9 @@ func (d *dumper) typeBody(t Type) {
 	case *EnumType:
 		for _, m := range t.Members {
 			d.line("member %s", m.Id)
-			d.indented(func() { d.fields(m.Fields) })
+			for name, _ := range m.Fields {
+				d.indented(func() { d.field(m.Fields[name]) })
+			}
 		}
 		d.methods(t.Methods)
 	case *InterfaceType:

@@ -45,6 +45,7 @@ type Param struct {
 
 type FunctionType struct {
 	Node       *ast.FunctionSignature
+	Receiver   *Param
 	Params     []Param
 	ReturnType Type
 }
@@ -63,6 +64,12 @@ type InterfaceType struct {
 
 func (it *InterfaceType) typ()         {}
 func (it *InterfaceType) Name() string { return it.Id }
+func (it *InterfaceType) GetMethod(id string) *FunctionType {
+	if m, ok := it.Methods[id]; ok {
+		return m
+	}
+	return nil
+}
 
 type Field struct {
 	Node     *ast.Field
@@ -74,7 +81,7 @@ type Field struct {
 type EnumMember struct {
 	Node   *ast.EnumMember
 	Id     string
-	Fields []Field
+	Fields map[string]Field
 }
 
 type EnumType struct {
@@ -87,9 +94,9 @@ type EnumType struct {
 func (et *EnumType) typ()         {}
 func (et *EnumType) Name() string { return et.Id }
 func (et *EnumType) GetMember(id string) *EnumMember {
-	for _, m := range et.Members {
+	for idx, m := range et.Members {
 		if m.Id == id {
-			return &m
+			return &et.Members[idx]
 		}
 	}
 	return nil
@@ -147,6 +154,28 @@ const (
 	Resolving
 	Resolved
 )
+
+type OperandMode int
+
+const (
+	Invalid OperandMode = iota
+	TypeExpr
+	Variable
+	Value
+	Module
+	VariantConstructor
+)
+
+type Operand struct {
+	Mode   OperandMode
+	Type   Type
+	Symbol Symbol
+	Member *EnumMember
+}
+
+func invalidOperand(sym Symbol) Operand {
+	return Operand{Mode: Invalid, Type: InvalidT, Symbol: sym}
+}
 
 type Symbol interface {
 	sym()
@@ -401,9 +430,10 @@ func (a *Analyzer) resolveStructSymbol(symT *StructType) {
 
 func (a *Analyzer) resolveEnumMember(enum *EnumType, member *ast.EnumMember) {
 	em := EnumMember{Node: member, Id: member.Name}
+	em.Fields = map[string]Field{}
 	for _, f := range member.Fields {
 		mf := Field{Node: f, Id: f.Name, Type: a.resolveType(f.Type)}
-		em.Fields = append(em.Fields, mf)
+		em.Fields[f.Name] = mf
 	}
 	enum.Members = append(enum.Members, em)
 }
@@ -509,7 +539,7 @@ func (a *Analyzer) resolveSliceType(typ *ast.SliceType) Type {
 func (a *Analyzer) resolveType(typ ast.Type) Type {
 	switch t := typ.(type) {
 	case nil:
-		return nil
+		return VoidT
 	case *ast.NamedType:
 		return a.resolveNamedType(t)
 	case *ast.SliceType:
@@ -518,14 +548,15 @@ func (a *Analyzer) resolveType(typ ast.Type) Type {
 	return InvalidT
 }
 
-func (a *Analyzer) inferInfixExprType(expr *ast.InfixExpr) Type {
-	leftT := a.inferExprType(expr.Left)
-	rightT := a.inferExprType(expr.Right)
-	if !identical(leftT, rightT) {
-		a.addErrorF(expr, "type `%s` != `%s`", leftT.Name(), rightT.Name())
-		return InvalidT
+func (a *Analyzer) inferInfixExprOp(expr *ast.InfixExpr) Operand {
+	leftOp := a.inferExprOp(expr.Left)
+	rightOp := a.inferExprOp(expr.Right)
+	if !identical(leftOp.Type, rightOp.Type) {
+		a.addErrorF(expr, "type `%s` != `%s`",
+			leftOp.Type.Name(), rightOp.Type.Name())
+		return invalidOperand(nil)
 	}
-	return leftT
+	return leftOp
 }
 
 func findParamById(params []Param, id string) *Param {
@@ -576,7 +607,7 @@ func (a *Analyzer) checkFunctionArgTypes(
 			return false
 		}
 
-		argType := a.inferExprType(arg.Value)
+		argType := a.inferExprOp(arg.Value).Type
 		if !identical(param.Type, argType) {
 			a.addErrorF(arg, "type `%s` != `%s`",
 				argType.Name(), param.Type.Name())
@@ -588,65 +619,83 @@ func (a *Analyzer) checkFunctionArgTypes(
 		})
 	}
 	if len(requiredNames) > 0 {
-		a.addErrorF(callExpr, "missing values for arguments %s",
+		a.addErrorF(callExpr, "missing value(s) for argument(s) `%s`",
 			strings.Join(requiredNames, ", "))
 		return false
 	}
 	return true
 }
 
-func (a *Analyzer) inferStructCallExprType(
-	st *StructType, expr *ast.CallExpr,
-) Type {
+func (a *Analyzer) inferStructCallExprOp(st *StructType, expr *ast.CallExpr) Operand {
+	ok := a.inferConstructorArgsExprOp(st.Fields, expr)
+	if ok {
+		return Operand{Mode: Value, Type: st}
+	}
+	return invalidOperand(nil)
+}
+
+func (a *Analyzer) inferEnumVariantCallExprOp(
+	et *EnumType, em *EnumMember, expr *ast.CallExpr,
+) Operand {
+	ok := a.inferConstructorArgsExprOp(em.Fields, expr)
+	if ok {
+		return Operand{Mode: Value, Type: et, Member: em}
+	}
+	return invalidOperand(nil)
+}
+
+func (a *Analyzer) inferConstructorArgsExprOp(
+	fields map[string]Field, expr *ast.CallExpr,
+) bool {
 	var filledNames []string
 	for _, arg := range expr.Args {
 		if arg.Name == "" {
 			a.addErrorF(arg, "constructors only accept named arguments")
-			return InvalidT
+			return false
 		}
-		field := st.GetField(arg.Name)
-		if field == nil {
+		field, ok := fields[arg.Name]
+		if !ok {
 			a.addErrorF(arg, "`%s` has no field `%s`",
-				st.Id, arg.Name)
-			return InvalidT
+				exprPath(expr.Left), arg.Name)
+			return false
 		}
 		if slices.Contains(filledNames, arg.Name) {
 			a.addErrorF(arg, "duplicate field name `%s` in constructor call",
 				arg.Name)
-			return InvalidT
+			return false
 		}
 		filledNames = append(filledNames, arg.Name)
 
-		argType := a.inferExprType(arg.Value)
+		argOp := a.inferExprOp(arg.Value)
 
-		if !identical(field.Type, argType) {
+		if !identical(field.Type, argOp.Type) {
 			a.addErrorF(arg, "type `%s` != `%s`",
-				argType.Name(), field.Type.Name())
-			return InvalidT
+				argOp.Type.Name(), field.Type.Name())
+			return false
 		}
 	}
 
 	var missingFields []string
-	for k, v := range st.Fields {
+	for k, v := range fields {
 		if !slices.Contains(filledNames, k) && !hasZeroValue(v.Type) {
 			missingFields = append(missingFields, k)
 		}
 	}
 	if len(missingFields) > 0 {
-		a.addErrorF(st.Node, "missing value(s) for field(s): %s",
+		a.addErrorF(expr, "missing value(s) for field(s): %s",
 			strings.Join(missingFields, ", "))
-		return InvalidT
+		return false
 	}
-	return st
+	return true
 }
 
-func (a *Analyzer) inferFunctionCallExprType(
+func (a *Analyzer) inferFunctionCallExprOp(
 	ft *FunctionType, expr *ast.CallExpr,
-) Type {
+) Operand {
 	if !a.checkFunctionArgTypes(ft, ft.Params, expr.Args, expr) {
-		return InvalidT
+		return invalidOperand(nil)
 	}
-	return ft.ReturnType
+	return Operand{Mode: Value, Type: ft.ReturnType}
 }
 
 func getFieldById(fields []Field, id string) *Field {
@@ -668,93 +717,192 @@ func hasZeroValue(t Type) bool {
 	return false
 }
 
-func (a *Analyzer) inferCallExprType(expr *ast.CallExpr) Type {
-	leftT := a.inferExprType(expr.Left)
-	// infer argument types and check against callee params
-	switch lt := leftT.(type) {
-	case *FunctionType:
-		t := a.inferFunctionCallExprType(lt, expr)
-		return t
-	case *StructType:
-		t := a.inferStructCallExprType(lt, expr)
-		return t
+func exprPath(expr ast.Expression) string {
+	switch t := expr.(type) {
+	case *ast.IdentifierExpr:
+		return t.Value
+	case *ast.MemberExpr:
+		return exprPath(t.Container) + "." + t.Member
+	case *ast.CallExpr:
+		return exprPath(t.Left) + "()"
+	default:
+		return "expression"
 	}
-	return leftT
 }
 
-func (a *Analyzer) inferIdentifierExprType(expr *ast.IdentifierExpr) Type {
+func (a *Analyzer) inferCallExprOp(expr *ast.CallExpr) Operand {
+	leftOp := a.inferExprOp(expr.Left)
+
+	switch leftOp.Mode {
+	case Invalid:
+		return leftOp
+	case TypeExpr:
+		switch t := leftOp.Type.(type) {
+		case *StructType:
+			return a.inferStructCallExprOp(t, expr)
+		default:
+			a.addErrorF(expr.Left, "cannot construct `%s`", leftOp.Symbol.Name())
+			return invalidOperand(leftOp.Symbol)
+		}
+	case Value, Variable:
+		switch t := leftOp.Type.(type) {
+		case *FunctionType:
+			return a.inferFunctionCallExprOp(t, expr)
+		default:
+			a.addErrorF(expr.Left, "cannot call `%s` of type `%s`",
+				exprPath(expr.Left), t.Name())
+			return invalidOperand(leftOp.Symbol)
+		}
+	case Module:
+		a.addErrorF(expr.Left, "module calls not yet implmented")
+		return invalidOperand(leftOp.Symbol)
+	case VariantConstructor:
+		switch t := leftOp.Type.(type) {
+		case *EnumType:
+			return a.inferEnumVariantCallExprOp(t, leftOp.Member, expr)
+		default:
+			a.addErrorF(expr.Left, "constructor call on non variant")
+			return invalidOperand(leftOp.Symbol)
+		}
+	default:
+		a.addErrorF(expr, "unknown expression")
+		return invalidOperand(leftOp.Symbol)
+	}
+}
+
+func (a *Analyzer) inferIdentifierExprOp(expr *ast.IdentifierExpr) Operand {
 	name := expr.Value
 	sym, _ := a.CurrentScope.lookup(name)
 	if sym == nil {
 		a.addErrorF(expr, "`%s` not found", name)
-		return InvalidT
+		return invalidOperand(nil)
 	}
-	switch st := sym.GetType().(type) {
-	case *PrimitiveType:
-		return st
-	case *FunctionType:
-		return st
-	case *StructType, *EnumType, *InterfaceType, *SliceType:
-		return st
+	if sym, ok := sym.(*VarSymbol); ok {
+		if sym.State() == Unresolved {
+			a.resolveVarSymbol(sym)
+		} else if sym.State() == Resolving {
+			a.addErrorF(sym.Node, "init cycle: `%s` refers to itself", sym.Name())
+			return invalidOperand(sym)
+		}
 	}
-	a.addErrorF(expr, "invalid name `%s` in call expression", name)
-	return InvalidT
+
+	switch sym.(type) {
+	case *VarSymbol:
+		return Operand{Mode: Variable, Type: sym.GetType(), Symbol: sym}
+	case *TypeSymbol:
+		return Operand{Mode: TypeExpr, Type: sym.GetType(), Symbol: sym}
+	case *FunctionSymbol:
+		return Operand{Mode: Value, Type: sym.GetType()}
+	case *ImportSymbol:
+		return Operand{Mode: Module, Type: sym.GetType(), Symbol: sym}
+	}
+	return invalidOperand(sym)
 }
 
-func (a *Analyzer) inferMemberExprType(expr *ast.MemberExpr) Type {
-	containerT := a.inferExprType(expr.Container)
-	if containerT == InvalidT {
-		return containerT
+func (a *Analyzer) inferMemberExprType(expr *ast.MemberExpr) Operand {
+	containerOp := a.inferExprOp(expr.Container)
+	if containerOp.Type == InvalidT {
+		return invalidOperand(containerOp.Symbol)
 	}
-	switch t := containerT.(type) {
-	case *StructType:
-		field := t.GetField(expr.Member)
-		if field != nil {
-			return field.Type
+
+	switch containerOp.Mode {
+	case TypeExpr:
+		switch t := containerOp.Type.(type) {
+		case *EnumType:
+			member := t.GetMember(expr.Member)
+			if member == nil {
+				a.addErrorF(expr.Container, "`%s` has no variant `%s`",
+					exprPath(expr.Container), expr.Member)
+				return invalidOperand(nil)
+			}
+			if len(member.Fields) < 1 {
+				return Operand{Mode: Value, Type: t}
+			}
+			return Operand{Mode: VariantConstructor, Type: t, Member: member}
+		default:
+			a.addErrorF(expr, "invalid member access on `%s`", t.Name())
+			return invalidOperand(nil)
 		}
-		method := t.GetMethod(expr.Member)
-		if method != nil {
-			return method.Type
+	case Variable, Value:
+		switch t := containerOp.Type.(type) {
+		case *StructType:
+			field := t.GetField(expr.Member)
+			if field != nil {
+				return Operand{Mode: containerOp.Mode,
+					Type: field.Type, Symbol: containerOp.Symbol}
+			}
+			method := t.GetMethod(expr.Member)
+			if method != nil {
+				return Operand{Mode: Value, Type: method.Type}
+			}
+			a.addErrorF(expr, "`%s` has no field or method `%s`",
+				t.Name(), expr.Member)
+			return invalidOperand(containerOp.Symbol)
+		case *EnumType:
+			method := t.GetMethod(expr.Member)
+			if method != nil {
+				return Operand{Mode: Value, Type: method.Type}
+			}
+			a.addErrorF(expr, "`%s` has no method `%s`",
+				t.Name(), expr.Member)
+			// return invalidOperand(containerOp.Symbol)
+			return Operand{Mode: Value, Type: t}
+		case *InterfaceType:
+			method := t.GetMethod(expr.Member)
+			if method != nil {
+				return Operand{Mode: Value, Type: method}
+			}
+			a.addErrorF(expr, "`%s` has no method `%s`",
+				t.Name(), expr.Member)
+			return invalidOperand(containerOp.Symbol)
+		default:
+			a.addErrorF(expr, "`%s` has member `%s`",
+				t.Name(), expr.Member)
+			return invalidOperand(containerOp.Symbol)
 		}
-		a.addErrorF(expr, "`%s` has no member `%s`", t.Name(), expr.Member)
-		return InvalidT
-	case *EnumType:
-		method := t.GetMethod(expr.Member)
-		if method != nil {
-			return method.Type
-		}
-		return t
-	case *SliceType:
-		a.addErrorF(expr, "methods on slices not implemented")
-		return InvalidT
-	case *PrimitiveType:
-		a.addErrorF(expr, "`%s` has no method or field `%s`",
-			t.Name(), expr.Member)
-		return InvalidT
+	case Module:
+		a.addErrorF(expr, "module inference not yet implemented")
+		return invalidOperand(containerOp.Symbol)
+	default:
+		return invalidOperand(containerOp.Symbol)
 	}
-	return InvalidT
 }
 
-func (a *Analyzer) inferExprType(expr ast.Expression) Type {
+func (a *Analyzer) inferExprOp(expr ast.Expression) Operand {
 	switch et := expr.(type) {
 	case *ast.IntegerLiteralExpr:
-		return IntT
+		return Operand{Mode: Value, Type: IntT}
 	case *ast.FloatLiteralExpr:
-		return FloatT
+		return Operand{Mode: Value, Type: FloatT}
 	case *ast.StringLiteralExpr:
-		return StrT
+		return Operand{Mode: Value, Type: StrT}
 	case *ast.BoolLiteralExpr:
-		return BoolT
+		return Operand{Mode: Value, Type: BoolT}
 	case *ast.InfixExpr:
-		return a.inferInfixExprType(et)
+		return a.inferInfixExprOp(et)
 	case *ast.CallExpr:
-		return a.inferCallExprType(et)
+		return a.inferCallExprOp(et)
 	case *ast.IdentifierExpr:
-		return a.inferIdentifierExprType(et)
+		return a.inferIdentifierExprOp(et)
 	case *ast.MemberExpr:
 		return a.inferMemberExprType(et)
 	}
-	return InvalidT
+	return invalidOperand(nil)
+}
+
+func identicalFunctionType(a, b *FunctionType) bool {
+	if len(a.Params) != len(b.Params) {
+		return false
+	}
+	if !identical(a.ReturnType, b.ReturnType) {
+		return false
+	}
+	for idx, p := range a.Params {
+		if !identical(p.Type, b.Params[idx].Type) {
+			return false
+		}
+	}
+	return true
 }
 
 func identical(a, b Type) bool {
@@ -771,22 +919,43 @@ func identical(a, b Type) bool {
 			return false
 		}
 		return at == bt
+	case *EnumType:
+		bt, ok := b.(*EnumType)
+		if !ok {
+			return false
+		}
+		return at == bt
+	case *SliceType:
+		bt, ok := b.(*SliceType)
+		if !ok {
+			return false
+		}
+		return identical(at.ElementType, bt.ElementType)
+	case *FunctionType:
+		bt, ok := b.(*FunctionType)
+		if !ok {
+			return false
+		}
+		return identicalFunctionType(at, bt)
 	}
 	return false
 }
 
 func (a *Analyzer) resolveVarSymbol(sym *VarSymbol) {
+	if sym.State() == Resolved {
+		return
+	}
 	sym.state = Resolving
 	declaredType := a.resolveType(sym.Node.Type)
-	inferredType := a.inferExprType(sym.Node.Value)
-	if declaredType != nil && !identical(declaredType, inferredType) {
+	inferredOp := a.inferExprOp(sym.Node.Value)
+	if declaredType != nil && !identical(declaredType, inferredOp.Type) {
 		a.addErrorF(sym.Node, "type `%s` != `%s`", declaredType.Name(),
-			inferredType.Name())
+			inferredOp.Type.Name())
 		sym.Type = InvalidT
 	} else if declaredType != nil {
 		sym.Type = declaredType
 	} else {
-		sym.Type = inferredType
+		sym.Type = inferredOp.Type
 	}
 	sym.state = Resolved
 }
@@ -811,6 +980,8 @@ func (a *Analyzer) resolveParam(
 	switch {
 	case p.Id == "self" && target != nil:
 		p.Type = target
+		ft.Receiver = &p
+		return
 	case p.Id == "self" && target == nil:
 		a.addErrorF(node, "only methods accept `self`")
 		return

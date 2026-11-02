@@ -3,10 +3,13 @@ type State struct {
     item: Item
 }
 impl State {
-    fn name(self) -> str {
+    fn getName(self) -> str {
         return self.name;
     }
-    fn item(self) -> Item: self.item;
+    fn getItem(self) -> Item: self.item;
+    fn setName(self, name: str) -> State {
+        return self.with(name=name);
+    }
 }
 
 type Item struct {
@@ -19,7 +22,6 @@ var intLiteral: int = 1;
 
 var callExpr: int = add(1, 2);
 
-var typeCall: State = State(name="abc", item=Item());
 
 var binaryExpr: int = 1 + 2;
 
@@ -40,4 +42,8 @@ var typedCall2 = State(item=Item(), name="abc");
 
 var itemAge = typeCall.item.age;
 
-var stateName = typedCall2.name(1, 2);
+var typeCall: State = State(name="abc", item=Item());
+
+var stateName = typedCall2.getName();
+
+var newState = typedCall2.setName("new name");

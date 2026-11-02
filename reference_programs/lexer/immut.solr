@@ -25,7 +25,7 @@ type Status enum {
 }
 
 fn addTodo(s: State, t: Todo) -> State {
-    return s.with(todos=[..s.todos, t]);
+    return s.with(todos=[...s.todos, t]);
 }
 
 fn getTodo(s: State, id: int) -> Todo! {
@@ -66,7 +66,7 @@ fn deleteTodo(s: State, id: int) -> State! {
     }
     var newS = s.with(
         todos=s.todos[:idx[0]] + s.todos[idx[0]+1:]
-    )l
+    );
     return Ok(newS);
 }
 
@@ -79,10 +79,13 @@ type Action enum {
 
 fn update(s: State, action: Action) -> State {
     var newS = switch action {
-        is Add => addTodo(s, Todo(id=s.nextId(), title=action.title, status=Status.InProgress)),
-        is Complete => completeTodo(s, action.id,
-        is Uncomplete => markTodoInProgress(s, action.id),
-        is Delete => deleteTodo(s, action.id)
+        Add => addTodo(
+            s, 
+            Todo(id=s.nextId(), title=action.title, status=Status.InProgress)
+        ),
+        Complete => completeTodo(s, action.id),
+        Uncomplete => markTodoInProgress(s, action.id),
+        Delete => deleteTodo(s, action.id)
     }
     if newS.error() {
         log.error(newS);
@@ -97,8 +100,8 @@ fn main() {
     for {
         var args = io.stdin.input().split(" ");
         var action = switch args[0] {
-            "add" => Action.Add(args[1])
-            "q" => break;
+            "add" => Action.Add(args[1]),
+            "q" => { break; }
         }
     }
 }
