@@ -1,0 +1,10 @@
+// fn other(a: str) -> str: {
+//     return a;
+// }
+
+fn main() {
+    var a = "Hello, Stellar!";
+    var b = a;
+    // other(a);
+    print(a);
+}

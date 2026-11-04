@@ -1,3 +1,6 @@
+/*
+Package hir
+*/
 package hir
 
 import (
@@ -70,9 +73,17 @@ func (s *Scope) lookupValue(name string) Value {
 }
 
 type Param struct {
-	Name string
-	Type Type
+	Name     string
+	Type     Type
+	Variable *Variable
 }
+
+type ExpressionStmt struct {
+	Value Value
+}
+
+func (es *ExpressionStmt) val()          {}
+func (es *ExpressionStmt) getType() Type { return es.Value.getType() }
 
 type Function struct {
 	Node       ast.Node
@@ -80,8 +91,9 @@ type Function struct {
 	Receiver   Value
 	Params     []Param
 	ReturnType Type
-	Body       *Scope
+	Body       []Value
 	state      ResolutionState
+	Builtin    bool
 }
 
 func (f *Function) typ()                   {}
@@ -100,6 +112,8 @@ func (f *Function) getParamByName(name string) *Param {
 
 type FunctionCall struct {
 	Node       ast.Node
+	Callee     *Function
+	Args       []Value
 	ReturnType Type
 }
 
@@ -114,13 +128,37 @@ type StructConstructorCall struct {
 func (scc *StructConstructorCall) val()          {}
 func (scc *StructConstructorCall) getType() Type { return scc.ReturnType }
 
-type Literal struct {
-	Node ast.Node
-	Type Type
+type StrLiteral struct {
+	Node  ast.Node
+	Value string
 }
 
-func (l *Literal) val()          {}
-func (l *Literal) getType() Type { return l.Type }
+func (l *StrLiteral) val()          {}
+func (l *StrLiteral) getType() Type { return StrT }
+
+type BoolLiteral struct {
+	Node  ast.Node
+	Value bool
+}
+
+func (l *BoolLiteral) val()          {}
+func (l *BoolLiteral) getType() Type { return BoolT }
+
+type IntLiteral struct {
+	Node  ast.Node
+	Value int
+}
+
+func (l *IntLiteral) val()          {}
+func (l *IntLiteral) getType() Type { return IntT }
+
+type FloatLiteral struct {
+	Node  ast.Node
+	Value float64
+}
+
+func (l *FloatLiteral) val()          {}
+func (l *FloatLiteral) getType() Type { return FloatT }
 
 type Producer struct {
 	Node  ast.Node
@@ -151,6 +189,7 @@ type Variable struct {
 }
 
 func (v *Variable) val()          {}
+func (v *Variable) stmt()         {}
 func (v *Variable) getType() Type { return v.ResolvedType }
 
 type InvalidValue struct {
@@ -194,6 +233,19 @@ var (
 	InvalidT = &PrimitiveType{Name: "invalid"}
 )
 
+// builtin functions
+var (
+	StPrint = &Function{
+		Name: "print",
+		Params: []Param{
+			{Name: "value", Type: StrT},
+		},
+		Builtin:    true,
+		ReturnType: VoidT,
+		state:      Resolved,
+	}
+)
+
 func newUniverse() *Scope {
 	u := &Scope{Name: "universe"}
 	u.Types = map[string]Type{
@@ -203,7 +255,9 @@ func newUniverse() *Scope {
 		"bool":  BoolT,
 		"void":  VoidT,
 	}
-	u.Values = map[string]Value{}
+	u.Values = map[string]Value{
+		"print": StPrint,
+	}
 	return u
 }
 
@@ -222,6 +276,17 @@ type Analyzer struct {
 	Package      *Scope
 	CurrentScope *Scope
 	Errors       []errors.Error
+}
+
+func (a *Analyzer) enterScope(name string) {
+	s := newScope(a.CurrentScope, name)
+	a.CurrentScope = s
+}
+
+func (a *Analyzer) exitScope() {
+	if a.CurrentScope.Parent != nil {
+		a.CurrentScope = a.CurrentScope.Parent
+	}
 }
 
 func (a *Analyzer) Dump() {
@@ -309,38 +374,31 @@ func (a *Analyzer) analyzeInfixExpr(expr *ast.InfixExpr) Value {
 }
 
 func (a *Analyzer) analyzeFunctionCallExpr(fn *Function, expr *ast.CallExpr) Value {
-	var requiredNames []string
-	for _, p := range fn.Params {
-		requiredNames = append(requiredNames, p.Name)
-	}
+	fc := &FunctionCall{Node: expr, ReturnType: fn.ReturnType, Callee: fn}
 	var satisfiedNames []string
-	for idx, arg := range expr.Args {
-		var param *Param
-		argValue := a.analyzeExpr(arg.Value)
-		if idx >= len(fn.Params) {
-			a.addError(
-				arg,
-				fmt.Errorf(
-					"function `%s` takes %d args, but %d were given",
-					fn.Name, len(fn.Params), len(expr.Args),
-				),
-			)
-			return &InvalidValue{Node: expr}
+	for idx, param := range fn.Params {
+		var arg *ast.Argument
+		for _, a := range expr.Args {
+			if a.Name == param.Name {
+				arg = a
+				break
+			}
 		}
+		if arg == nil {
+			if idx < len(expr.Args) {
+				arg = expr.Args[idx]
+			} else {
+				err := fmt.Errorf("function `%s` takes %d args, but %d were given",
+					fn.Name, len(fn.Params), len(expr.Args))
+				a.addError(expr, err)
+				return &InvalidValue{Node: expr}
+			}
+		}
+		argValue := a.analyzeExpr(arg.Value)
 		if idx > 0 && arg.Name == "" && expr.Args[idx-1].Name != "" {
 			err := fmt.Errorf("postional args cannot come after named args")
 			a.addError(arg, err)
 			return &InvalidValue{Node: arg}
-		}
-		if arg.Name != "" {
-			param = fn.getParamByName(arg.Name)
-			if param == nil {
-				err := fmt.Errorf("function `%s` has no param `%s`", fn.Name, arg.Name)
-				a.addError(arg, err)
-				return &InvalidValue{expr}
-			}
-		} else {
-			param = &fn.Params[idx]
 		}
 
 		if err := identical(argValue.getType(), param.Type); err != nil {
@@ -348,6 +406,7 @@ func (a *Analyzer) analyzeFunctionCallExpr(fn *Function, expr *ast.CallExpr) Val
 			return &InvalidValue{Node: arg}
 		}
 		satisfiedNames = append(satisfiedNames, param.Name)
+		fc.Args = append(fc.Args, argValue)
 	}
 
 	if len(satisfiedNames) < len(fn.Params) {
@@ -356,8 +415,7 @@ func (a *Analyzer) analyzeFunctionCallExpr(fn *Function, expr *ast.CallExpr) Val
 		a.addError(expr, err)
 		return &InvalidValue{Node: expr}
 	}
-
-	return &FunctionCall{Node: expr, ReturnType: fn.ReturnType}
+	return fc
 }
 
 func hasZeroValue(t Type) bool {
@@ -441,13 +499,13 @@ func (a *Analyzer) analyzeIdentifierExpr(expr *ast.IdentifierExpr) Value {
 func (a *Analyzer) analyzeExpr(expr ast.Expression) Value {
 	switch t := expr.(type) {
 	case *ast.IntegerLiteralExpr:
-		return &Literal{Node: t, Type: IntT}
+		return &IntLiteral{Node: t, Value: int(t.Value)}
 	case *ast.FloatLiteralExpr:
-		return &Literal{Node: t, Type: FloatT}
+		return &FloatLiteral{Node: t, Value: t.Value}
 	case *ast.StringLiteralExpr:
-		return &Literal{Node: t, Type: StrT}
+		return &StrLiteral{Node: t, Value: t.Value}
 	case *ast.BoolLiteralExpr:
-		return &Literal{Node: t, Type: BoolT}
+		return &BoolLiteral{Node: t, Value: t.Value}
 	case *ast.InfixExpr:
 		return a.analyzeInfixExpr(t)
 	case *ast.CallExpr:
@@ -461,7 +519,7 @@ func (a *Analyzer) analyzeExpr(expr ast.Expression) Value {
 	}
 }
 
-func (a *Analyzer) analyzeVarStmt(stmt *ast.VarStmt) {
+func (a *Analyzer) analyzeVarStmt(stmt *ast.VarStmt) Value {
 	v := &Variable{Node: stmt, Name: stmt.Name.Literal}
 	if stmt.Type != nil {
 		typeName := getTypeName(stmt.Type)
@@ -472,15 +530,18 @@ func (a *Analyzer) analyzeVarStmt(stmt *ast.VarStmt) {
 	}
 	v.Value = a.analyzeExpr(stmt.Value)
 	v.InferredType = v.Value.getType()
-	if err := identical(v.DeclaredType, v.Value.getType()); err != nil {
+	if v.DeclaredType == nil {
+		v.ResolvedType = v.InferredType
+	} else if err := identical(v.DeclaredType, v.InferredType); err != nil {
 		a.addError(stmt, err)
 		v.ResolvedType = InvalidT
 	} else {
-		v.ResolvedType = v.Value.getType()
+		v.ResolvedType = v.InferredType
 	}
 	if err := a.declareValue(v.Name, v); err != nil {
 		a.addError(stmt, err)
 	}
+	return v
 }
 
 func (a *Analyzer) analyzeFunctionParam(
@@ -637,7 +698,61 @@ func (a *Analyzer) collectFunctionsAndTypes(prog *ast.Program) {
 	}
 }
 
+func (a *Analyzer) declareFunctionParam(fn *Function, p *Param) {
+	v := &Variable{Name: p.Name, DeclaredType: p.Type,
+		InferredType: p.Type, ResolvedType: p.Type, Mutable: false}
+	if err := a.declareValue(v.Name, v); err != nil {
+		a.addError(fn.Node, err)
+	}
+	p.Variable = v
+}
+
+func (a *Analyzer) analyzeFunctionBodyStmt(fn *Function, stmt ast.Statement) {
+	switch t := stmt.(type) {
+	case *ast.VarStmt:
+		v := a.analyzeVarStmt(t)
+		fn.Body = append(fn.Body, v)
+	case *ast.ExpressionStatement:
+		v := a.analyzeExpr(t.Expression)
+		es := &ExpressionStmt{Value: v}
+		fn.Body = append(fn.Body, es)
+	}
+}
+
+func (a *Analyzer) analyzeFunctionStmtBody(fn *Function, body ast.Expression) {
+	block, ok := body.(*ast.BlockExpr)
+	if !ok {
+		err := fmt.Errorf("expected block body but got %T", body)
+		a.addError(body, err)
+		return
+	}
+	for _, stmt := range block.Statements {
+		a.analyzeFunctionBodyStmt(fn, stmt)
+	}
+}
+
+func (a *Analyzer) analyzeFunctionBody(fn *Function) {
+	a.enterScope(fn.Name)
+	for _, p := range fn.Params {
+		a.declareFunctionParam(fn, &p)
+	}
+	switch t := fn.Node.(type) {
+	case *ast.FunctionStmt:
+		a.analyzeFunctionStmtBody(fn, t.Body)
+	}
+	a.exitScope()
+}
+
+func (a *Analyzer) analyzeFunctionBodies() {
+	for _, sym := range a.Package.Values {
+		if fn, ok := sym.(*Function); ok {
+			a.analyzeFunctionBody(fn)
+		}
+	}
+}
+
 func (a *Analyzer) Run(prog *ast.Program) {
 	a.collectFunctionsAndTypes(prog)
 	a.analyzeProgram(prog)
+	a.analyzeFunctionBodies()
 }

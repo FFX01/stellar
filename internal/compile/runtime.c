@@ -10,3 +10,8 @@ void* stellar_alloc(size_t size) {
 void stellar_init() {
     GC_init();
 }
+
+void stellar_print(const char *s) {
+    fputs(s, stdout);
+    fputc('\n', stdout);
+}

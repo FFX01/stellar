@@ -5,4 +5,4 @@ build:
 	go build -tags llvm23 ./cmd/compile
 
 comp:
-	clang output.bc internal/compile/runtime.c -I/opt/homebrew/include -L/opt/homebrew/lib -lgc -o hello
+	clang output.bc internal/compile/runtime.c -I/opt/homebrew/include -L/opt/homebrew/lib -lgc -o stellar
