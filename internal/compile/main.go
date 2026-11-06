@@ -9,7 +9,7 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-type sgen struct {
+type Generator struct {
 	ctx    llvm.Context
 	mod    llvm.Module
 	b      llvm.Builder
@@ -25,6 +25,31 @@ type sgen struct {
 	t     struct {
 		int, bool, float, str, i32, main, void llvm.Type
 	}
+}
+
+func NewGenerator() *Generator {
+	g := &Generator{}
+	g.fns = map[*hir.Function]llvm.Value{}
+	g.ftypes = map[*hir.Function]llvm.Type{}
+	g.vars = map[*hir.Variable]llvm.Value{}
+	g.ctx = llvm.NewContext()
+	g.mod = g.ctx.NewModule("stellar_module")
+
+	// initializeglobal types
+	g.t.int = g.ctx.Int64Type()
+	g.t.bool = g.ctx.Int1Type()
+	g.t.float = g.ctx.DoubleType()
+	g.t.str = llvm.PointerType(g.ctx.Int8Type(), 0)
+	g.t.i32 = g.ctx.Int32Type()
+	g.t.void = g.ctx.VoidType()
+
+	// initialize builtins
+	g.rt.initT = llvm.FunctionType(g.t.void, nil, false)
+	g.rt.init = llvm.AddFunction(g.mod, "stellar_init", g.rt.initT)
+	g.rt.printT = llvm.FunctionType(g.t.void, []llvm.Type{g.t.str}, false)
+	g.rt.print = llvm.AddFunction(g.mod, "stellar_print", g.rt.printT)
+
+	return g
 }
 
 func Compile(a *hir.Analyzer) {
@@ -44,88 +69,34 @@ func Compile(a *hir.Analyzer) {
 	td := tm.CreateTargetData()
 	defer td.Dispose()
 
-	gen := sgen{}
-	gen.fns = map[*hir.Function]llvm.Value{}
-	gen.ftypes = map[*hir.Function]llvm.Type{}
-	gen.vars = map[*hir.Variable]llvm.Value{}
+	g := NewGenerator()
 
-	gen.ctx = llvm.NewContext()
-	gen.mod = gen.ctx.NewModule("stellar_module")
-	gen.mod.SetTarget(triple)
-	gen.mod.SetDataLayout(td.String())
+	g.mod.SetTarget(triple)
+	g.mod.SetDataLayout(td.String())
 
-	gen.t.int = gen.ctx.Int64Type()
-	gen.t.bool = gen.ctx.Int1Type()
-	gen.t.float = gen.ctx.DoubleType()
-	gen.t.str = llvm.PointerType(gen.ctx.Int8Type(), 0)
-	gen.t.i32 = gen.ctx.Int32Type()
-	gen.t.void = gen.ctx.VoidType()
-
-	gen.rt.initT = llvm.FunctionType(gen.t.void, nil, false)
-	gen.rt.init = llvm.AddFunction(gen.mod, "stellar_init", gen.rt.initT)
-	gen.rt.printT = llvm.FunctionType(gen.t.void, []llvm.Type{gen.t.str}, false)
-	gen.rt.print = llvm.AddFunction(gen.mod, "stellar_print", gen.rt.printT)
 	// allocType := llvm.FunctionType(ptrType, []llvm.Type{td.IntPtrType()}, false)
 	// allocFn := llvm.AddFunction(module, "stellar_alloc", allocType)
 
-	gen.b = gen.ctx.NewBuilder()
-	defer gen.b.Dispose()
+	g.b = g.ctx.NewBuilder()
+	defer g.b.Dispose()
 
 	// build user code
-	for name, value := range a.Package.Values {
-		switch t := value.(type) {
-		case *hir.Function:
-			if t.Builtin {
-				continue
-			}
-			var params []llvm.Type
-			for _, p := range t.Params {
-				pt, err := gen.llvmType(p.Type)
-				if err != nil {
-					log.Fatal(err)
-				}
-				params = append(params, pt)
-			}
-			ret, err := gen.llvmType(t.ReturnType)
-			if err != nil {
-				log.Fatal(err)
-			}
-			ft := llvm.FunctionType(ret, params, false)
-			llname := name
-			if llname == "main" {
-				llname = "stellar.main"
-			}
-			fn := llvm.AddFunction(gen.mod, llname, ft)
-			fn.SetLinkage(llvm.InternalLinkage)
-			for i, p := range t.Params {
-				fn.Param(i).SetName(p.Name)
-			}
-			gen.fns[t] = fn
-			gen.ftypes[t] = ft
-			if llname == "stellar.main" {
-				gen.mainT = ft
-				gen.mainF = fn
-			}
-		}
-	}
-	for f, fn := range gen.fns {
-		gen.genFunction(f, fn)
-	}
+	g.addValues(a)
 
 	// wrap stellar init and stellar main in C main
-	cMainT := llvm.FunctionType(gen.t.i32, nil, false)
-	cMainF := llvm.AddFunction(gen.mod, "main", cMainT)
-	entry := gen.ctx.AddBasicBlock(cMainF, "entry")
-	gen.b.SetInsertPointAtEnd(entry)
+	cMainT := llvm.FunctionType(g.t.i32, nil, false)
+	cMainF := llvm.AddFunction(g.mod, "main", cMainT)
+	entry := g.ctx.AddBasicBlock(cMainF, "entry")
+	g.b.SetInsertPointAtEnd(entry)
 
-	gen.b.CreateCall(gen.rt.initT, gen.rt.init, nil, "")
-	gen.b.CreateCall(gen.mainT, gen.mainF, nil, "")
+	g.b.CreateCall(g.rt.initT, g.rt.init, nil, "")
+	g.b.CreateCall(g.mainT, g.mainF, nil, "")
 
-	gen.b.CreateRet(llvm.ConstInt(gen.t.i32, 0, false))
+	g.b.CreateRet(llvm.ConstInt(g.t.i32, 0, false))
 
-	fmt.Print(gen.mod.String())
+	fmt.Print(g.mod.String())
 
-	if err := llvm.VerifyModule(gen.mod, llvm.PrintMessageAction); err != nil {
+	if err := llvm.VerifyModule(g.mod, llvm.PrintMessageAction); err != nil {
 		panic(err.Error())
 	}
 
@@ -135,22 +106,28 @@ func Compile(a *hir.Analyzer) {
 	}
 	defer file.Close()
 
-	if err := llvm.WriteBitcodeToFile(gen.mod, file); err != nil {
+	if err := llvm.WriteBitcodeToFile(g.mod, file); err != nil {
 		panic(err.Error())
 	}
 }
 
-func (gen *sgen) genStmt(s hir.Value) {
+func (gen *Generator) genStmt(s hir.Value) {
 	switch t := s.(type) {
 	case *hir.Variable:
 		v := gen.genExpr(t.Value)
 		gen.vars[t] = v
+	case *hir.ReturnStmt:
+		if t.Value == nil {
+			gen.b.CreateRetVoid()
+		} else {
+			gen.b.CreateRet(gen.genExpr(t.Value))
+		}
 	default:
 		gen.genExpr(t)
 	}
 }
 
-func (gen *sgen) genFunctionCall(v *hir.FunctionCall) llvm.Value {
+func (gen *Generator) genFunctionCall(v *hir.FunctionCall) llvm.Value {
 	var args []llvm.Value
 	for _, arg := range v.Args {
 		args = append(args, gen.genExpr(arg))
@@ -165,11 +142,11 @@ func (gen *sgen) genFunctionCall(v *hir.FunctionCall) llvm.Value {
 		gen.ftypes[v.Callee],
 		gen.fns[v.Callee],
 		args,
-		"",
+		"call",
 	)
 }
 
-func (gen *sgen) genExpr(v hir.Value) llvm.Value {
+func (gen *Generator) genExpr(v hir.Value) llvm.Value {
 	switch t := v.(type) {
 	case *hir.StrLiteral:
 		return gen.b.CreateGlobalString(t.Value, ".str")
@@ -194,7 +171,7 @@ func (gen *sgen) genExpr(v hir.Value) llvm.Value {
 	return llvm.Value{}
 }
 
-func (gen *sgen) llvmType(t hir.Type) (llvm.Type, error) {
+func (gen *Generator) llvmType(t hir.Type) (llvm.Type, error) {
 	switch t {
 	case hir.IntT:
 		return gen.t.int, nil
@@ -210,7 +187,51 @@ func (gen *sgen) llvmType(t hir.Type) (llvm.Type, error) {
 	return llvm.Type{}, fmt.Errorf("unsupported type: %T", t)
 }
 
-func (gen *sgen) genFunction(f *hir.Function, fn llvm.Value) {
+func (g *Generator) addFunctionValue(name string, v *hir.Function) {
+	if v.Builtin {
+		return
+	}
+	var params []llvm.Type
+	for _, p := range v.Params {
+		pt, err := g.llvmType(p.Type)
+		if err != nil {
+			log.Fatal(err)
+		}
+		params = append(params, pt)
+	}
+	ret, err := g.llvmType(v.ReturnType)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ft := llvm.FunctionType(ret, params, false)
+	llname := name
+	if llname == "main" {
+		llname = "stellar.main"
+	}
+	fn := llvm.AddFunction(g.mod, llname, ft)
+	fn.SetLinkage(llvm.InternalLinkage)
+	for i, p := range v.Params {
+		fn.Param(i).SetName(p.Name)
+	}
+	g.fns[v] = fn
+	g.ftypes[v] = ft
+	if llname == "stellar.main" {
+		g.mainT = ft
+		g.mainF = fn
+	}
+}
+
+func (g *Generator) addValues(a *hir.Analyzer) {
+	for name, value := range a.Package.Values {
+		switch t := value.(type) {
+		case *hir.Function:
+			g.addFunctionValue(name, t)
+		}
+	}
+
+}
+
+func (gen *Generator) genFunction(f *hir.Function, fn llvm.Value) {
 	entry := gen.ctx.AddBasicBlock(fn, "entry")
 	gen.b.SetInsertPointAtEnd(entry)
 
@@ -224,5 +245,11 @@ func (gen *sgen) genFunction(f *hir.Function, fn llvm.Value) {
 
 	if f.ReturnType == hir.VoidT {
 		gen.b.CreateRetVoid()
+	}
+}
+
+func (g *Generator) genFunctions(a *hir.Analyzer) {
+	for f, fn := range g.fns {
+		g.genFunction(f, fn)
 	}
 }

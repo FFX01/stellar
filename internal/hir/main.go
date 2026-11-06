@@ -1,35 +1,13 @@
-/*
-Package hir
-*/
 package hir
 
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"stellar/internal/ast"
 	"stellar/internal/errors"
-	"strings"
 
 	"github.com/sanity-io/litter"
 )
-
-type ResolutionState int
-
-const (
-	Unresolved ResolutionState = iota
-	Resolved
-)
-
-type Type interface {
-	typ()
-	name() string
-	State() ResolutionState
-}
-type Value interface {
-	val()
-	getType() Type
-}
 
 type Scope struct {
 	Name     string
@@ -39,6 +17,15 @@ type Scope struct {
 	Values   map[string]Value
 }
 
+func newScope(parent *Scope, name string) *Scope {
+	s := &Scope{Name: name, Parent: parent}
+	s.Types = map[string]Type{}
+	s.Values = map[string]Value{}
+	if parent != nil {
+		parent.Children = append(parent.Children, s)
+	}
+	return s
+}
 func (s *Scope) delcareType(name string, typ Type) error {
 	if _, ok := s.Types[name]; ok {
 		return fmt.Errorf("redaclaration of `%s`", name)
@@ -53,176 +40,95 @@ func (s *Scope) declareValue(name string, val Value) error {
 	s.Values[name] = val
 	return nil
 }
-func (s *Scope) lookupType(name string) Type {
+func (s *Scope) lookupType(name string) (Type, error) {
 	if t, ok := s.Types[name]; ok {
-		return t
+		if t.GetState() != Resolved {
+			return nil, fmt.Errorf("type `%s` not fully resolved", name)
+		}
+		return t, nil
 	}
 	if s.Parent != nil {
 		return s.Parent.lookupType(name)
 	}
-	return nil
+	return nil, fmt.Errorf("type `%s` not found", name)
 }
-func (s *Scope) lookupValue(name string) Value {
+func (s *Scope) lookupValue(name string) (Value, error) {
 	if v, ok := s.Values[name]; ok {
-		return v
+		return v, nil
 	}
 	if s.Parent != nil {
 		return s.Parent.lookupValue(name)
 	}
-	return nil
+	return nil, fmt.Errorf("value `%s` not found", name)
 }
 
-type Param struct {
-	Name     string
-	Type     Type
-	Variable *Variable
+type ResolutionState int
+
+const (
+	Unresolved ResolutionState = iota
+	Resolved
+)
+
+type Operator int
+
+const (
+	OpAdd Operator = iota
+	OpSub
+	OpMul
+	OpDiv
+	OpMod
+	OpEq
+	OpNeq
+	OpLt
+	OpLTE
+	OpGt
+	OpGte
+)
+
+var OpMap = map[string]Operator{
+	"+":  OpAdd,
+	"-":  OpSub,
+	"*":  OpMul,
+	"/":  OpDiv,
+	"%":  OpMod,
+	"==": OpEq,
+	"!=": OpNeq,
+	"<":  OpLt,
+	"<=": OpLTE,
+	">":  OpGt,
+	">=": OpGte,
 }
 
-type ExpressionStmt struct {
-	Value Value
+type Type interface {
+	typ()
+	GetState() ResolutionState
+	getName() string
 }
 
-func (es *ExpressionStmt) val()          {}
-func (es *ExpressionStmt) getType() Type { return es.Value.getType() }
-
-type Function struct {
-	Node       ast.Node
-	Name       string
-	Receiver   Value
-	Params     []Param
-	ReturnType Type
-	Body       []Value
-	state      ResolutionState
-	Builtin    bool
-}
-
-func (f *Function) typ()                   {}
-func (f *Function) val()                   {}
-func (f *Function) name() string           { return f.Name }
-func (f *Function) getType() Type          { return f }
-func (f *Function) State() ResolutionState { return f.state }
-func (f *Function) getParamByName(name string) *Param {
-	for idx, p := range f.Params {
-		if p.Name == name {
-			return &f.Params[idx]
-		}
-	}
-	return nil
-}
-
-type FunctionCall struct {
-	Node       ast.Node
-	Callee     *Function
-	Args       []Value
-	ReturnType Type
-}
-
-func (fc *FunctionCall) val()          {}
-func (fc *FunctionCall) getType() Type { return fc.ReturnType }
-
-type StructConstructorCall struct {
-	Node       ast.Node
-	ReturnType *StructType
-}
-
-func (scc *StructConstructorCall) val()          {}
-func (scc *StructConstructorCall) getType() Type { return scc.ReturnType }
-
-type StrLiteral struct {
-	Node  ast.Node
-	Value string
-}
-
-func (l *StrLiteral) val()          {}
-func (l *StrLiteral) getType() Type { return StrT }
-
-type BoolLiteral struct {
-	Node  ast.Node
-	Value bool
-}
-
-func (l *BoolLiteral) val()          {}
-func (l *BoolLiteral) getType() Type { return BoolT }
-
-type IntLiteral struct {
-	Node  ast.Node
-	Value int
-}
-
-func (l *IntLiteral) val()          {}
-func (l *IntLiteral) getType() Type { return IntT }
-
-type FloatLiteral struct {
-	Node  ast.Node
-	Value float64
-}
-
-func (l *FloatLiteral) val()          {}
-func (l *FloatLiteral) getType() Type { return FloatT }
-
-type Producer struct {
-	Node  ast.Node
-	Type  Type
-	Fresh bool
-}
-
-func (p *Producer) val()          {}
-func (p *Producer) getType() Type { return p.Type }
-
-type StructConstructor struct {
-	Node ast.Node
+type StructField struct {
+	Node *ast.Field
 	Name string
-	Type *StructType
+	Type Type
 }
 
-func (sc *StructConstructor) val()          {}
-func (sc *StructConstructor) getType() Type { return sc.Type }
-
-type Variable struct {
-	Node         *ast.VarStmt
-	Name         string
-	Value        Value
-	DeclaredType Type
-	InferredType Type
-	ResolvedType Type
-	Mutable      bool
-}
-
-func (v *Variable) val()          {}
-func (v *Variable) stmt()         {}
-func (v *Variable) getType() Type { return v.ResolvedType }
-
-type InvalidValue struct {
-	Node ast.Node
-}
-
-func (i *InvalidValue) val()          {}
-func (i *InvalidValue) getType() Type { return InvalidT }
-
-type Field struct {
+type StructT struct {
+	Node   *ast.TypeDeclStmt
 	Name   string
-	Type   Type
-	Public bool
+	State  ResolutionState
+	Fields map[string]StructField
 }
 
-type StructType struct {
-	Node   ast.Node
-	Name   string
-	Fields map[string]Field
-	state  ResolutionState
-}
-
-func (st *StructType) typ()                   {}
-func (st *StructType) name() string           { return st.Name }
-func (st *StructType) State() ResolutionState { return st.state }
+func (st *StructT) typ()                      {}
+func (st *StructT) GetState() ResolutionState { return st.State }
+func (st *StructT) getName() string           { return st.Name }
 
 type PrimitiveType struct {
 	Name string
 }
 
-func (pt *PrimitiveType) typ()                   {}
-func (pt *PrimitiveType) name() string           { return pt.Name }
-func (pt *PrimitiveType) State() ResolutionState { return Resolved }
+func (pt *PrimitiveType) typ()                      {}
+func (pt *PrimitiveType) GetState() ResolutionState { return Resolved }
+func (pt *PrimitiveType) getName() string           { return pt.Name }
 
 var (
 	IntT     = &PrimitiveType{Name: "int"}
@@ -231,51 +137,215 @@ var (
 	BoolT    = &PrimitiveType{Name: "bool"}
 	VoidT    = &PrimitiveType{Name: "void"}
 	InvalidT = &PrimitiveType{Name: "invalid"}
-)
-
-// builtin functions
-var (
-	StPrint = &Function{
+	SelfT    = &PrimitiveType{Name: "self"}
+	PrintT   = &FunctionT{
 		Name: "print",
-		Params: []Param{
+		Params: []FParam{
 			{Name: "value", Type: StrT},
 		},
-		Builtin:    true,
 		ReturnType: VoidT,
-		state:      Resolved,
+		RState:     Resolved,
 	}
 )
 
-func newUniverse() *Scope {
-	u := &Scope{Name: "universe"}
-	u.Types = map[string]Type{
-		"int":   IntT,
-		"float": FloatT,
-		"str":   StrT,
-		"bool":  BoolT,
-		"void":  VoidT,
-	}
-	u.Values = map[string]Value{
-		"print": StPrint,
-	}
-	return u
+type FParam struct {
+	Node ast.Node
+	Name string
+	Type Type
 }
 
-func newScope(parent *Scope, name string) *Scope {
-	s := &Scope{Name: name, Parent: parent}
-	s.Types = map[string]Type{}
-	s.Values = map[string]Value{}
-	if parent != nil {
-		parent.Children = append(parent.Children, s)
-	}
-	return s
+type FunctionT struct {
+	Node       ast.Node
+	Name       string
+	Params     []FParam
+	ReturnType Type
+	RState     ResolutionState
 }
+
+func (ft *FunctionT) typ()                      {}
+func (ft *FunctionT) GetState() ResolutionState { return ft.RState }
+func (ft *FunctionT) getName() string           { return ft.Name }
+
+type Value interface {
+	val()
+	GetType() Type
+}
+
+var (
+	printV = &FunctionV{Name: "print", Type: PrintT}
+)
+
+type StructConstructionArg struct {
+	Node  *ast.Argument
+	Name  string
+	Value Value
+}
+
+type StructConstruction struct {
+	Node   *ast.CallExpr
+	Callee *StructT
+	Args   []StructConstructionArg
+}
+
+func (sc *StructConstruction) val()          {}
+func (sc *StructConstruction) GetType() Type { return sc.Callee }
+
+type StructV struct {
+	Name string
+	Type *StructT
+}
+
+func (sv *StructV) val()          {}
+func (sv *StructV) GetType() Type { return sv.Type }
+
+type FunctionV struct {
+	Name string
+	Type *FunctionT
+}
+
+func (fv *FunctionV) val()          {}
+func (fv *FunctionV) GetType() Type { return fv.Type }
+
+type FunctionCallArgument struct {
+	Node  *ast.Argument
+	Value Value
+}
+
+func (a *FunctionCallArgument) val()          {}
+func (a *FunctionCallArgument) GetType() Type { return a.Value.GetType() }
+
+type FunctionCall struct {
+	Node   *ast.CallExpr
+	Callee *FunctionT
+	Args   []FunctionCallArgument
+	Type   Type
+}
+
+func (fc *FunctionCall) val()          {}
+func (fc *FunctionCall) GetType() Type { return fc.Type }
+
+type Variable struct {
+	Node         *ast.VarStmt
+	Name         string
+	DeclaredType Type
+	InferredType Type
+	ResolvedType Type
+	Value        Value
+}
+
+func (v *Variable) val()          {}
+func (v *Variable) GetType() Type { return v.ResolvedType }
+
+type BinaryValue struct {
+	Node  *ast.InfixExpr
+	Op    Operator
+	Left  Value
+	Right Value
+	Type  Type
+}
+
+func (bv *BinaryValue) val()          {}
+func (bv *BinaryValue) GetType() Type { return bv.Type }
+
+var (
+	InvalidV = &InvalidValue{}
+)
+
+type InvalidValue struct{}
+
+func (iv *InvalidValue) val()          {}
+func (iv *InvalidValue) GetType() Type { return InvalidT }
+
+type IntLiteral struct {
+	Node  *ast.IntegerLiteralExpr
+	Value int
+}
+
+func (il *IntLiteral) val()          {}
+func (il *IntLiteral) GetType() Type { return IntT }
+
+type FloatLiteral struct {
+	Node  *ast.FloatLiteralExpr
+	Value float64
+}
+
+func (fl *FloatLiteral) val()          {}
+func (fl *FloatLiteral) GetType() Type { return FloatT }
+
+type BoolLiteral struct {
+	Node  *ast.BoolLiteralExpr
+	Value bool
+}
+
+func (bl *BoolLiteral) val()          {}
+func (bl *BoolLiteral) GetType() Type { return BoolT }
+
+type StrLiteral struct {
+	Node  *ast.StringLiteralExpr
+	Value string
+}
+
+func (sl *StrLiteral) val()          {}
+func (sl *StrLiteral) GetType() Type { return StrT }
+
+type FunctionParamVar struct {
+	Node  ast.Node
+	Name  string
+	Index int
+	Type  Type
+}
+
+func (fpv *FunctionParamVar) val()          {}
+func (fpv *FunctionParamVar) GetType() Type { return fpv.Type }
+
+type Statement interface {
+	GetNode() ast.Node
+	stmt()
+}
+
+type ExpressionStatement struct {
+	Node  ast.Expression
+	Value Value
+}
+
+func (es *ExpressionStatement) stmt()             {}
+func (es *ExpressionStatement) GetNode() ast.Node { return es.Node }
+
+type ReturnStatement struct {
+	Node  *ast.ReturnStmt
+	Value Value
+}
+
+func (rs *ReturnStatement) stmt()             {}
+func (rs *ReturnStatement) GetNode() ast.Node { return rs.Node }
+
+type FunctionBody struct {
+	Node      ast.Node
+	Type      *FunctionT
+	ParamVars []*FunctionParamVar
+	Body      []Statement
+}
+
+func (fb *FunctionBody) val() {}
 
 type Analyzer struct {
-	Universe     *Scope
-	Package      *Scope
-	CurrentScope *Scope
-	Errors       []errors.Error
+	Universe       *Scope
+	Package        *Scope
+	CurrentScope   *Scope
+	Errors         []errors.Error
+	functionBodies map[string]*FunctionBody
+}
+
+func (a *Analyzer) storeFunctionBody(typeName string, fb *FunctionBody) {
+	namespace := typeName
+	if namespace == "" {
+		namespace = "_"
+	}
+	fullName := fmt.Sprintf("%s.%s", namespace, fb.Type.Name)
+	if _, ok := a.functionBodies[fullName]; ok {
+		a.errorF(fb.Node, "redaclarion of function body for %s", fullName)
+	}
+	a.functionBodies[fullName] = fb
 }
 
 func (a *Analyzer) enterScope(name string) {
@@ -292,6 +362,7 @@ func (a *Analyzer) exitScope() {
 func (a *Analyzer) Dump() {
 	litter.Config.FieldExclusions = regexp.MustCompile(`^(Node)$`)
 	litter.Dump(a.Universe)
+	litter.Dump(a.functionBodies)
 	if len(a.Errors) > 0 {
 		fmt.Println("--- Errors ---")
 		for _, e := range a.Errors {
@@ -300,9 +371,259 @@ func (a *Analyzer) Dump() {
 	}
 }
 
+func (a *Analyzer) errorF(node ast.Node, format string, args ...any) {
+	err := fmt.Errorf(format, args...)
+	a.addError(node, err)
+}
+
 func (a *Analyzer) addError(node ast.Node, e error) {
 	se := errors.Error{Position: node.Pos(), Message: e.Error()}
 	a.Errors = append(a.Errors, se)
+}
+
+func newUniverse() *Scope {
+	u := &Scope{Name: "universe"}
+	u.Types = map[string]Type{
+		"int":   IntT,
+		"float": FloatT,
+		"str":   StrT,
+		"bool":  BoolT,
+		"void":  VoidT,
+		"print": PrintT,
+	}
+	u.Values = map[string]Value{
+		"print": printV,
+	}
+	return u
+}
+
+func (a *Analyzer) collectFunctionType(n *ast.FunctionStmt) {
+	ft := &FunctionT{Node: n, Name: n.Signature.Name, RState: Unresolved}
+	fv := &FunctionV{Name: ft.Name, Type: ft}
+	if err := a.CurrentScope.delcareType(ft.Name, ft); err != nil {
+		a.addError(n, err)
+	}
+	if err := a.CurrentScope.declareValue(fv.Name, fv); err != nil {
+		a.addError(n, err)
+	}
+}
+
+func (a *Analyzer) collectStructType(st *ast.StructType, stmt *ast.TypeDeclStmt) {
+	t := &StructT{Node: stmt, Name: stmt.Name, State: Resolved}
+	t.Fields = map[string]StructField{}
+	if err := a.CurrentScope.delcareType(t.Name, t); err != nil {
+		a.addError(stmt, err)
+	}
+	v := &StructV{Name: t.Name, Type: t}
+	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
+		a.addError(stmt, err)
+	}
+}
+
+func (a *Analyzer) collectTypeDeclStmt(stmt *ast.TypeDeclStmt) {
+	switch t := stmt.Definition.(type) {
+	case *ast.StructType:
+		a.collectStructType(t, stmt)
+	}
+}
+
+func (a *Analyzer) pass1(prog *ast.Program) {
+	for _, stmt := range prog.Statements {
+		switch t := stmt.(type) {
+		case *ast.FunctionStmt:
+			a.collectFunctionType(t)
+		case *ast.TypeDeclStmt:
+			a.collectTypeDeclStmt(t)
+		}
+	}
+}
+
+func (a *Analyzer) resolveFunctionParam(t *FunctionT, p *ast.Parameter) {
+	fp := FParam{Node: p, Name: p.Name}
+	tname := getTypeName(p.Type)
+	typ, err := a.CurrentScope.lookupType(tname)
+	if err != nil {
+		a.addError(p, err)
+		return
+	}
+	fp.Type = typ
+	t.Params = append(t.Params, fp)
+}
+
+func (a *Analyzer) resolveFunctionT(t *FunctionT) {
+	stmt, ok := t.Node.(*ast.FunctionStmt)
+	if !ok {
+		return
+	}
+	rtName := getTypeName(stmt.Signature.ReturnType)
+	rt, err := a.CurrentScope.lookupType(rtName)
+	if err != nil {
+		a.addError(stmt.Signature.ReturnType, err)
+		return
+	}
+	t.ReturnType = rt
+	for _, p := range stmt.Signature.Parameters {
+		a.resolveFunctionParam(t, p)
+	}
+	t.RState = Resolved
+}
+
+func (a *Analyzer) resolveStructT(t *StructT) {
+	decl := t.Node.Definition
+	stmt, ok := decl.(*ast.StructType)
+	if !ok {
+		a.errorF(stmt, "Invalid struct definition")
+		return
+	}
+	for _, f := range stmt.Fields {
+		field := StructField{Node: f, Name: f.Name}
+		tname := getTypeName(f.Type)
+		ft, err := a.CurrentScope.lookupType(tname)
+		if err != nil {
+			a.addError(f, err)
+			field.Type = InvalidT
+		} else {
+			field.Type = ft
+		}
+		t.Fields[field.Name] = field
+	}
+}
+
+func (a *Analyzer) pass2() {
+	for _, t := range a.Package.Types {
+		switch t := t.(type) {
+		case *FunctionT:
+			a.resolveFunctionT(t)
+		case *StructT:
+			a.resolveStructT(t)
+		}
+	}
+}
+
+func (a *Analyzer) resolveReturnStmt(fb *FunctionBody, stmt *ast.ReturnStmt) {
+	s := &ReturnStatement{Node: stmt}
+	if stmt.Value != nil {
+		s.Value = a.resolveExpr(stmt.Value)
+	}
+
+	switch {
+	case fb.Type.ReturnType == VoidT && s.Value != nil:
+		a.errorF(stmt, "function `%s` returns no value", fb.Type.Name)
+	case fb.Type.ReturnType != VoidT && s.Value == nil:
+		a.errorF(stmt,
+			"function `%s` must return `%s`", fb.Type.Name, fb.Type.ReturnType.getName())
+	case s.Value != nil:
+		if err := identical(s.Value.GetType(), fb.Type.ReturnType); err != nil {
+			a.addError(stmt, err)
+		}
+	}
+	fb.Body = append(fb.Body, s)
+}
+
+func (a *Analyzer) resolveFunctionBodyStmt(fb *FunctionBody, stmt ast.Statement) {
+	switch t := stmt.(type) {
+	case *ast.ReturnStmt:
+		a.resolveReturnStmt(fb, t)
+	}
+}
+
+func (a *Analyzer) resolveFunctionBodyExpr(fb *FunctionBody, expr ast.Expression) {
+	v := a.resolveExpr(expr)
+	es := &ExpressionStatement{Node: expr, Value: v}
+	fb.Body = append(fb.Body, es)
+}
+
+func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
+	a.enterScope(t.Name)
+	defer a.exitScope()
+
+	stmt, ok := t.Node.(*ast.FunctionStmt)
+	if !ok {
+		a.errorF(stmt, "function expressions not yet supported")
+	}
+	fb := &FunctionBody{Node: stmt.Body, Type: t}
+
+	for idx, p := range t.Params {
+		pv := &FunctionParamVar{Node: p.Node, Name: p.Name, Index: idx, Type: p.Type}
+		fb.ParamVars = append(fb.ParamVars, pv)
+		if err := a.CurrentScope.declareValue(pv.Name, pv); err != nil {
+			a.addError(p.Node, err)
+		}
+	}
+
+	switch t := stmt.Body.(type) {
+	case *ast.BlockExpr:
+		for _, s := range t.Statements {
+			a.resolveFunctionBodyStmt(fb, s)
+		}
+	default:
+		a.resolveFunctionBodyExpr(fb, t)
+	}
+
+	a.storeFunctionBody("", fb)
+}
+
+func (a *Analyzer) pass4() {
+	for _, t := range a.Package.Types {
+		switch t := t.(type) {
+		case *FunctionT:
+			a.resolveFunctionBody(t)
+		}
+	}
+}
+
+func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt) {
+	v := &Variable{Node: stmt, Name: stmt.Name.Literal}
+	if stmt.Type != nil {
+		tname := getTypeName(stmt.Type)
+		t, err := a.CurrentScope.lookupType(tname)
+		if err != nil {
+			a.addError(stmt.Type, err)
+			v.DeclaredType = InvalidT
+		} else {
+			v.DeclaredType = t
+		}
+	}
+	val := a.resolveExpr(stmt.Value)
+	if val == InvalidV {
+		a.errorF(stmt.Value, "invalid expression")
+		v.Value = InvalidV
+		v.InferredType = InvalidT
+	} else {
+		v.Value = val
+		v.InferredType = val.GetType()
+	}
+	switch {
+	case v.DeclaredType == InvalidT || v.InferredType == InvalidT:
+		v.ResolvedType = InvalidT
+	case v.DeclaredType != nil:
+		if err := identical(v.DeclaredType, v.InferredType); err != nil {
+			a.addError(stmt, err)
+			v.ResolvedType = InvalidT
+		}
+		v.ResolvedType = v.DeclaredType
+	case v.DeclaredType == nil:
+		v.ResolvedType = v.InferredType
+	}
+	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
+		a.addError(stmt, err)
+	}
+}
+
+func (a *Analyzer) pass3(prog *ast.Program) {
+	for _, stmt := range prog.Statements {
+		switch t := stmt.(type) {
+		case *ast.VarStmt:
+			a.resolveVarStmt(t)
+		}
+	}
+}
+
+func (a *Analyzer) Run(prog *ast.Program) {
+	a.pass1(prog) // collect top-level function and type names
+	a.pass2()     // resolve function and method types
+	a.pass3(prog) // resolve top-level vars
+	a.pass4()     // resolve function and method bodies
 }
 
 func NewAnalyzer() *Analyzer {
@@ -313,15 +634,8 @@ func NewAnalyzer() *Analyzer {
 		Package:      pkg,
 		CurrentScope: pkg,
 	}
+	a.functionBodies = map[string]*FunctionBody{}
 	return a
-}
-
-func (a *Analyzer) declareType(name string, typ Type) error {
-	return a.CurrentScope.delcareType(name, typ)
-}
-
-func (a *Analyzer) declareValue(name string, val Value) error {
-	return a.CurrentScope.declareValue(name, val)
 }
 
 func getTypeName(typ ast.Type) string {
@@ -334,86 +648,137 @@ func getTypeName(typ ast.Type) string {
 	return ""
 }
 
-func identical(a, b Type) error {
-	defaultErr := fmt.Errorf("type `%s` != type `%s`", a.name(), b.name())
-
-	switch at := a.(type) {
-	case *PrimitiveType:
-		bt, ok := b.(*PrimitiveType)
-		if !ok {
-			return defaultErr
-		}
-		if at != bt {
-			return defaultErr
-		}
-		return nil
-	case *StructType:
-		bt, ok := b.(*StructType)
-		if !ok {
-			return defaultErr
-		}
-		if at != bt {
-			return defaultErr
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown type `%T`", a)
-	}
-}
-
-func (a *Analyzer) analyzeInfixExpr(expr *ast.InfixExpr) Value {
-	v := &Producer{Node: expr, Fresh: true}
-	left := a.analyzeExpr(expr.Left)
-	right := a.analyzeExpr(expr.Right)
-	if err := identical(left.getType(), right.getType()); err != nil {
+func (a *Analyzer) resolveIdentifierExpr(expr *ast.IdentifierExpr) Value {
+	val, err := a.CurrentScope.lookupValue(expr.Value)
+	if err != nil {
 		a.addError(expr, err)
-		return v
+		return InvalidV
 	}
-	v.Type = left.getType()
-	return v
+	return val
 }
 
-func (a *Analyzer) analyzeFunctionCallExpr(fn *Function, expr *ast.CallExpr) Value {
-	fc := &FunctionCall{Node: expr, ReturnType: fn.ReturnType, Callee: fn}
-	var satisfiedNames []string
-	for idx, param := range fn.Params {
+func getBinaryType(op Operator, operand Type) (Type, error) {
+	defaultErr := func(op, tname string) error {
+		return fmt.Errorf("cannot use `%s` on type `%s`", op, tname)
+	}
+	switch op {
+	case OpAdd:
+		switch operand {
+		case IntT, StrT, FloatT:
+			return operand, nil
+		default:
+			return InvalidT, defaultErr("+", operand.getName())
+		}
+	case OpSub:
+		switch operand {
+		case IntT, FloatT:
+			return operand, nil
+		default:
+			return InvalidT, defaultErr("-", operand.getName())
+		}
+	case OpMul:
+		switch operand {
+		case IntT, FloatT:
+			return operand, nil
+		default:
+			return InvalidT, defaultErr("*", operand.getName())
+		}
+	case OpDiv:
+		switch operand {
+		case IntT, FloatT:
+			return operand, nil
+		default:
+			return InvalidT, defaultErr("/", operand.getName())
+		}
+	case OpMod:
+		switch operand {
+		case IntT:
+			return operand, nil
+		default:
+			return InvalidT, defaultErr("%", operand.getName())
+		}
+	case OpEq, OpNeq, OpGt, OpGte, OpLt, OpLTE:
+		return BoolT, nil
+	}
+	return InvalidT, fmt.Errorf("invalid operator")
+}
+
+func (a *Analyzer) resolveInfixExpr(expr *ast.InfixExpr) Value {
+	bv := &BinaryValue{Node: expr}
+	bv.Left = a.resolveExpr(expr.Left)
+	bv.Right = a.resolveExpr(expr.Right)
+	op, ok := OpMap[expr.Operator]
+	if !ok {
+		a.errorF(expr, "invalid operator `%s`", expr.Operator)
+		return InvalidV
+	}
+	bv.Op = op
+
+	if err := identical(bv.Left.GetType(), bv.Right.GetType()); err != nil {
+		a.addError(expr, err)
+		return InvalidV
+	}
+	if bv.Left.GetType() == InvalidT || bv.Right.GetType() == InvalidT {
+		return InvalidV
+	}
+	bt, err := getBinaryType(op, bv.Left.GetType())
+	if err != nil {
+		a.addError(expr, err)
+	}
+	bv.Type = bt
+	return bv
+}
+
+// func (a *Analyzer) analyzeCallExpr(expr *ast.CallExpr) Value {
+// 	leftValue := a.analyzeExpr(expr.Left)
+// 	switch t := leftValue.getType().(type) {
+// 	case *FunctionT:
+// 		return a.analyzeFunctionCallExpr(t, expr)
+// 	case *StructType:
+// 		return a.analyzeStructConstructorCall(t, expr)
+// 	default:
+// 		return &InvalidValue{Node: expr}
+// 	}
+// }
+
+func getArgByName(args []*ast.Argument, name string) (int, *ast.Argument, error) {
+	for idx, a := range args {
+		if a.Name == name {
+			return idx, a, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("argument with name `%s` not found", name)
+}
+
+func (a *Analyzer) resolveFunctionCall(ft *FunctionT, expr *ast.CallExpr) Value {
+	fc := &FunctionCall{Node: expr, Callee: ft, Type: ft.ReturnType}
+	for idx, p := range ft.Params {
 		var arg *ast.Argument
-		for _, a := range expr.Args {
-			if a.Name == param.Name {
-				arg = a
-				break
+		_, namedArg, err := getArgByName(expr.Args, p.Name)
+		if err == nil {
+			arg = namedArg
+		} else {
+			if idx >= len(expr.Args) {
+				a.errorF(arg, "function`%s` expects %d args, but %d were passed",
+					ft.Name, len(ft.Params), len(expr.Args))
+				return fc
+			}
+			arg = expr.Args[idx]
+			if idx > 0 && expr.Args[idx-1].Name != "" {
+				a.errorF(arg, "positional arguments cannot come after named arguments")
+				return fc
 			}
 		}
-		if arg == nil {
-			if idx < len(expr.Args) {
-				arg = expr.Args[idx]
-			} else {
-				err := fmt.Errorf("function `%s` takes %d args, but %d were given",
-					fn.Name, len(fn.Params), len(expr.Args))
-				a.addError(expr, err)
-				return &InvalidValue{Node: expr}
-			}
+		argV := a.resolveExpr(arg.Value)
+		if argV == InvalidV {
+			a.errorF(arg, "unknown expression: `%T`", arg.Value)
+			return fc
 		}
-		argValue := a.analyzeExpr(arg.Value)
-		if idx > 0 && arg.Name == "" && expr.Args[idx-1].Name != "" {
-			err := fmt.Errorf("postional args cannot come after named args")
+		if err := identical(argV.GetType(), p.Type); err != nil {
 			a.addError(arg, err)
-			return &InvalidValue{Node: arg}
+			return fc
 		}
-
-		if err := identical(argValue.getType(), param.Type); err != nil {
-			a.addError(arg, err)
-			return &InvalidValue{Node: arg}
-		}
-		satisfiedNames = append(satisfiedNames, param.Name)
-		fc.Args = append(fc.Args, argValue)
-	}
-
-	if len(satisfiedNames) < len(fn.Params) {
-		err := fmt.Errorf("function `%s` takes %d args, but %d were given",
-			fn.Name, len(fn.Params), len(satisfiedNames))
-		a.addError(expr, err)
-		return &InvalidValue{Node: expr}
+		fc.Args = append(fc.Args, FunctionCallArgument{Node: arg, Value: argV})
 	}
 	return fc
 }
@@ -422,81 +787,54 @@ func hasZeroValue(t Type) bool {
 	switch t.(type) {
 	case *PrimitiveType:
 		return true
-	case *StructType:
+	case *StructT:
 		return false
 	}
 	return false
 }
 
-func (a *Analyzer) analyzeStructConstructorCall(
-	st *StructType, expr *ast.CallExpr,
-) Value {
-	n := &StructConstructorCall{Node: expr, ReturnType: st}
-	var filledFields []string
-	for idx, arg := range expr.Args {
-		if arg.Name == "" {
-			err := fmt.Errorf("constructor args must be named")
-			a.addError(arg, err)
-			continue
-		}
-		if idx >= len(st.Fields) {
-			err := fmt.Errorf("`%s` takes at most %d args, but got %d",
-				st.Name, len(st.Fields), len(expr.Args))
-			a.addError(arg, err)
-			continue
-		}
-		field, ok := st.Fields[arg.Name]
-		if !ok {
-			err := fmt.Errorf("struct `%s` has no field `%s`", st.Name, arg.Name)
-			a.addError(arg, err)
-			continue
-		}
-		argValue := a.analyzeExpr(arg.Value)
-		if err := identical(field.Type, argValue.getType()); err != nil {
-			a.addError(arg, err)
-			continue
-		}
-		filledFields = append(filledFields, arg.Name)
+func (a *Analyzer) resolveStructConstruction(st *StructT, expr *ast.CallExpr) Value {
+	sc := &StructConstruction{Node: expr, Callee: st}
+	if len(expr.Args) > len(st.Fields) {
+		a.errorF(expr, "too many arguments to constructor for struct `%s`", st.Name)
+		return InvalidV
 	}
-
-	var missingFields []string
-	for k, v := range st.Fields {
-		if !slices.Contains(filledFields, k) && !hasZeroValue(v.Type) {
-			missingFields = append(missingFields, k)
+	for n, f := range st.Fields {
+		_, arg, err := getArgByName(expr.Args, n)
+		if err != nil {
+			if hasZeroValue(f.Type) {
+				continue
+			}
+			a.addError(expr, err)
+			return InvalidV
 		}
+		argV := a.resolveExpr(arg.Value)
+		if argV == InvalidV {
+			a.errorF(arg, "unknown expression `%T`", arg.Value)
+			return InvalidV
+		}
+		if err := identical(f.Type, argV.GetType()); err != nil {
+			a.addError(arg, err)
+			return InvalidV
+		}
+		scArg := StructConstructionArg{Node: arg, Name: n, Value: argV}
+		sc.Args = append(sc.Args, scArg)
 	}
-	if len(missingFields) > 0 {
-		err := fmt.Errorf("missing fields in constructor call: `%s`",
-			strings.Join(missingFields, ", "))
-		a.addError(expr, err)
-	}
-	return n
+	return sc
 }
 
-func (a *Analyzer) analyzeCallExpr(expr *ast.CallExpr) Value {
-	leftValue := a.analyzeExpr(expr.Left)
-	switch t := leftValue.getType().(type) {
-	case *Function:
-		return a.analyzeFunctionCallExpr(t, expr)
-	case *StructType:
-		return a.analyzeStructConstructorCall(t, expr)
-	default:
-		return &InvalidValue{Node: expr}
+func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr) Value {
+	leftVal := a.resolveExpr(expr.Left)
+	switch t := leftVal.GetType().(type) {
+	case *FunctionT:
+		return a.resolveFunctionCall(t, expr)
+	case *StructT:
+		return a.resolveStructConstruction(t, expr)
 	}
+	return InvalidV
 }
 
-func (a *Analyzer) analyzeIdentifierExpr(expr *ast.IdentifierExpr) Value {
-	id := expr.Value
-	val := a.CurrentScope.lookupValue(id)
-	if val == nil {
-		err := fmt.Errorf("value `%s` not found", id)
-		a.addError(expr, err)
-		return &InvalidValue{Node: expr}
-	}
-	return val
-}
-
-func (a *Analyzer) analyzeExpr(expr ast.Expression) Value {
+func (a *Analyzer) resolveExpr(expr ast.Expression) Value {
 	switch t := expr.(type) {
 	case *ast.IntegerLiteralExpr:
 		return &IntLiteral{Node: t, Value: int(t.Value)}
@@ -506,253 +844,18 @@ func (a *Analyzer) analyzeExpr(expr ast.Expression) Value {
 		return &StrLiteral{Node: t, Value: t.Value}
 	case *ast.BoolLiteralExpr:
 		return &BoolLiteral{Node: t, Value: t.Value}
-	case *ast.InfixExpr:
-		return a.analyzeInfixExpr(t)
-	case *ast.CallExpr:
-		return a.analyzeCallExpr(t)
 	case *ast.IdentifierExpr:
-		return a.analyzeIdentifierExpr(t)
-	default:
-		err := fmt.Errorf("invalid expression: `%s`", expr.String())
-		a.addError(expr, err)
-		return &InvalidValue{Node: expr}
+		return a.resolveIdentifierExpr(t)
+	case *ast.InfixExpr:
+		return a.resolveInfixExpr(t)
+	case *ast.CallExpr:
+		return a.resolveCallExpr(t)
+		// case *ast.IdentifierExpr:
+		// 	return a.analyzeIdentifierExpr(t)
+		// default:
+		// 	err := fmt.Errorf("invalid expression: `%s`", expr.String())
+		// 	a.addError(expr, err)
+		// 	return &InvalidValue{Node: expr}
 	}
-}
-
-func (a *Analyzer) analyzeVarStmt(stmt *ast.VarStmt) Value {
-	v := &Variable{Node: stmt, Name: stmt.Name.Literal}
-	if stmt.Type != nil {
-		typeName := getTypeName(stmt.Type)
-		resolvedType := a.CurrentScope.lookupType(typeName)
-		if resolvedType != nil {
-			v.DeclaredType = resolvedType
-		}
-	}
-	v.Value = a.analyzeExpr(stmt.Value)
-	v.InferredType = v.Value.getType()
-	if v.DeclaredType == nil {
-		v.ResolvedType = v.InferredType
-	} else if err := identical(v.DeclaredType, v.InferredType); err != nil {
-		a.addError(stmt, err)
-		v.ResolvedType = InvalidT
-	} else {
-		v.ResolvedType = v.InferredType
-	}
-	if err := a.declareValue(v.Name, v); err != nil {
-		a.addError(stmt, err)
-	}
-	return v
-}
-
-func (a *Analyzer) analyzeFunctionParam(
-	p *ast.Parameter, stmt *ast.FunctionStmt,
-) Param {
-	n := Param{Name: p.Name}
-	typeName := getTypeName(p.Type)
-	t := a.CurrentScope.lookupType(typeName)
-	if t != nil {
-		n.Type = t
-	} else {
-		a.addError(p, fmt.Errorf("type `%s` not found", typeName))
-		n.Type = InvalidT
-	}
-	return n
-}
-
-func (a *Analyzer) analyzeFunctionStmt(stmt *ast.FunctionStmt) {
-	ft := a.CurrentScope.lookupType(stmt.Signature.Name)
-	if ft == nil {
-		err := fmt.Errorf("function `%s` not found", stmt.Signature.Name)
-		a.addError(stmt, err)
-		return
-	}
-	if ft.State() == Resolved {
-		return
-	}
-	f, ok := ft.(*Function)
-	if !ok {
-		err := fmt.Errorf("invalid type for function")
-		a.addError(stmt, err)
-		return
-	}
-	rtName := getTypeName(stmt.Signature.ReturnType)
-	rt := a.CurrentScope.lookupType(rtName)
-	if rt == nil {
-		a.addError(stmt.Signature.ReturnType,
-			fmt.Errorf("unknown type: `%s`", rtName))
-		f.ReturnType = InvalidT
-	} else {
-		f.ReturnType = rt
-	}
-
-	for _, p := range stmt.Signature.Parameters {
-		f.Params = append(f.Params, a.analyzeFunctionParam(p, stmt))
-	}
-	f.state = Resolved
-
-	if err := a.declareValue(f.Name, f); err != nil {
-		a.addError(stmt, err)
-	}
-}
-
-func (a *Analyzer) analyzeStructDeclStmt(def *ast.StructType, stmt *ast.TypeDeclStmt) {
-	maybeN := a.CurrentScope.lookupType(stmt.Name)
-	if maybeN == nil {
-		err := fmt.Errorf("`%s` not found", stmt.Name)
-		a.addError(stmt, err)
-		return
-	}
-	if maybeN.State() == Resolved {
-		return
-	}
-	n, ok := maybeN.(*StructType)
-	if !ok {
-		a.addError(stmt, fmt.Errorf("unknown type: `%T`", maybeN))
-	}
-	n.Fields = map[string]Field{}
-	for _, f := range def.Fields {
-		newF := Field{Name: f.Name, Public: f.IsPublic}
-		typ := a.CurrentScope.lookupType(getTypeName(f.Type))
-		if typ == nil {
-			err := fmt.Errorf("type `%s` not found", getTypeName(f.Type))
-			a.addError(f, err)
-		} else {
-			newF.Type = typ
-			n.Fields[newF.Name] = newF
-		}
-	}
-	n.state = Resolved
-
-	v := &StructConstructor{Node: stmt, Name: n.Name, Type: n}
-	if err := a.declareValue(v.Name, v); err != nil {
-		a.addError(stmt, err)
-	}
-}
-
-func (a *Analyzer) analyzeTypeDeclStmt(stmt *ast.TypeDeclStmt) {
-	switch t := stmt.Definition.(type) {
-	case *ast.StructType:
-		a.analyzeStructDeclStmt(t, stmt)
-	default:
-		err := fmt.Errorf("unknown type declaration: `%T`", t)
-		a.addError(stmt, err)
-	}
-}
-
-func (a *Analyzer) analyzeTypeOrFunctionDeclStmt(stmt ast.Statement) {
-	switch t := stmt.(type) {
-	case *ast.FunctionStmt:
-		a.analyzeFunctionStmt(t)
-	case *ast.TypeDeclStmt:
-		a.analyzeTypeDeclStmt(t)
-	default:
-		err := fmt.Errorf("unknown statement: `%T`", stmt)
-		a.addError(stmt, err)
-	}
-}
-
-func (a *Analyzer) analyzeProgram(prog *ast.Program) {
-	for _, s := range prog.Statements {
-		if _, ok := s.(*ast.VarStmt); !ok {
-			a.analyzeTypeOrFunctionDeclStmt(s)
-		}
-	}
-	for _, s := range prog.Statements {
-		if t, ok := s.(*ast.VarStmt); ok {
-			a.analyzeVarStmt(t)
-		}
-	}
-}
-
-func (a *Analyzer) collectStructType(stmt *ast.TypeDeclStmt) {
-	n := &StructType{Node: stmt, Name: stmt.Name, state: Unresolved}
-	if err := a.declareType(n.Name, n); err != nil {
-		err := fmt.Errorf("redeclaration of type `%s`", n.Name)
-		a.addError(stmt, err)
-	}
-}
-
-func (a *Analyzer) collectTypeDeclStmt(stmt *ast.TypeDeclStmt) {
-	switch stmt.Definition.(type) {
-	case *ast.StructType:
-		a.collectStructType(stmt)
-	}
-}
-
-func (a *Analyzer) collectFunctionStmt(stmt *ast.FunctionStmt) {
-	n := &Function{Node: stmt, Name: stmt.Signature.Name, state: Unresolved}
-	if err := a.declareType(n.Name, n); err != nil {
-		err := fmt.Errorf("redeclaration of function `%s`", n.Name)
-		a.addError(stmt, err)
-	}
-}
-
-func (a *Analyzer) collectFunctionsAndTypes(prog *ast.Program) {
-	for _, stmt := range prog.Statements {
-		switch t := stmt.(type) {
-		case *ast.TypeDeclStmt:
-			a.collectTypeDeclStmt(t)
-		case *ast.FunctionStmt:
-			a.collectFunctionStmt(t)
-		}
-	}
-}
-
-func (a *Analyzer) declareFunctionParam(fn *Function, p *Param) {
-	v := &Variable{Name: p.Name, DeclaredType: p.Type,
-		InferredType: p.Type, ResolvedType: p.Type, Mutable: false}
-	if err := a.declareValue(v.Name, v); err != nil {
-		a.addError(fn.Node, err)
-	}
-	p.Variable = v
-}
-
-func (a *Analyzer) analyzeFunctionBodyStmt(fn *Function, stmt ast.Statement) {
-	switch t := stmt.(type) {
-	case *ast.VarStmt:
-		v := a.analyzeVarStmt(t)
-		fn.Body = append(fn.Body, v)
-	case *ast.ExpressionStatement:
-		v := a.analyzeExpr(t.Expression)
-		es := &ExpressionStmt{Value: v}
-		fn.Body = append(fn.Body, es)
-	}
-}
-
-func (a *Analyzer) analyzeFunctionStmtBody(fn *Function, body ast.Expression) {
-	block, ok := body.(*ast.BlockExpr)
-	if !ok {
-		err := fmt.Errorf("expected block body but got %T", body)
-		a.addError(body, err)
-		return
-	}
-	for _, stmt := range block.Statements {
-		a.analyzeFunctionBodyStmt(fn, stmt)
-	}
-}
-
-func (a *Analyzer) analyzeFunctionBody(fn *Function) {
-	a.enterScope(fn.Name)
-	for _, p := range fn.Params {
-		a.declareFunctionParam(fn, &p)
-	}
-	switch t := fn.Node.(type) {
-	case *ast.FunctionStmt:
-		a.analyzeFunctionStmtBody(fn, t.Body)
-	}
-	a.exitScope()
-}
-
-func (a *Analyzer) analyzeFunctionBodies() {
-	for _, sym := range a.Package.Values {
-		if fn, ok := sym.(*Function); ok {
-			a.analyzeFunctionBody(fn)
-		}
-	}
-}
-
-func (a *Analyzer) Run(prog *ast.Program) {
-	a.collectFunctionsAndTypes(prog)
-	a.analyzeProgram(prog)
-	a.analyzeFunctionBodies()
+	return InvalidV
 }

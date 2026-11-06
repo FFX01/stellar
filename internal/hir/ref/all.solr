@@ -1,0 +1,20 @@
+type State struct {
+    count: int,
+    user: User
+}
+
+fn setUser(s: State, name: str, age: int) -> State {
+    var newUser = User(name=name, age=age);
+    mut newS = @s;
+    newS.user = newUser;
+    return newS;
+}
+
+type User struct {
+    name: str,
+    age: int
+}
+
+var jim = User(name="Jim", age=30);
+
+var newState: State = State(user=jim);

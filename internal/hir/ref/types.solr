@@ -8,3 +8,9 @@ type State struct {
 type Item struct {
     value: int
 }
+impl Item {
+    fn count(self) -> int {
+        return self.value;
+    }
+}
+

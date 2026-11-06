@@ -1,10 +1,12 @@
-// fn other(a: str) -> str: {
-//     return a;
-// }
+fn other(a: str) -> str {
+    return a;
+}
 
 fn main() {
     var a = "Hello, Stellar!";
     var b = a;
-    // other(a);
-    print(a);
+    var c = 1;
+    var d = 2;
+    var e = 2 + 3;
+    print(other(a));
 }
