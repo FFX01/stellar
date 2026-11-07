@@ -182,6 +182,9 @@ type Todo struct {
 - `pub` makes a field visible outside the module (§11).
 - **Construction** uses the type name as a function, with **named** arguments:
   `Todo(id=1, title="x", status=Status.Open)`. Positional arguments are an error.
+- **A constructor is not a value.** The type name can only be called: `Todo` alone can't be
+  passed as an argument, stored in a variable, or returned. To pass construction as a
+  function, write a closure: `fn(i: int) -> Todo: Todo(id=i)`.
 - **Omitted fields [working]:** a field of primitive or container type may be omitted and takes
   its zero value. A `Maybe` field may be omitted and is `None()`. A field of any other type
   must be given. Per-field defaults may be added later.
@@ -201,6 +204,11 @@ type Action enum {
 - Variants are listed with commas, and a trailing comma is allowed.
 - **Construction:** `Action.Add(title="x")`, `Action.Quit`. Fields are named, and positional
   arguments are an error.
+- A variant without fields (`Action.Quit`) is a value of type `Action`, and can be used
+  anywhere a value can.
+- A variant with fields is a constructor, and like a struct constructor (§3.4) it is not a
+  value: `Action.Add` alone can only be called (`Action.Add(title="x")`) or named as a
+  `switch` arm (§6.10). `f(Action.Add)` and `var a = Action.Add;` are errors.
 - A variant is read through `switch` (§6.10).
 - `Result` and `Maybe` are built-in enums with special support in the checker (§8).
 

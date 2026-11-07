@@ -3,18 +3,33 @@ type State struct {
     user: User
 }
 
+fn initState() -> State {
+    var user = User(name="tim", age=30, role=Role.Contractor(company="acme"));
+    mut s = State(count=1, user=user);
+    return s;
+}
+
 fn setUser(s: State, name: str, age: int) -> State {
-    var newUser = User(name=name, age=age);
+    var newUser = User(name=name, age=age, role=Role.Normal);
     mut newS = @s;
+    newS = State(user=newUser);
     newS.user = newUser;
+    newS.user.name = "tommy";
     return newS;
+}
+
+type Role enum {
+    Admin,
+    Normal,
+    Contractor(company: str)
 }
 
 type User struct {
     name: str,
-    age: int
+    age: int,
+    role: Role
 }
 
-var jim = User(name="Jim", age=30);
+var jim = User(name="Jim", age=30, role=Role.Normal);
 
 var newState: State = State(user=jim);

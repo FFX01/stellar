@@ -21,6 +21,12 @@ func identical(a, b Type) error {
 			return defaultErr
 		}
 		return nil
+	case *EnumT:
+		bt, ok := b.(*EnumT)
+		if !ok || at != bt {
+			return defaultErr
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown type `%T`", a)
 	}

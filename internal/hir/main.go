@@ -105,6 +105,36 @@ type Type interface {
 	getName() string
 }
 
+type VariantField struct {
+	Node *ast.Field
+	Name string
+	Type Type
+}
+
+type EnumVariant struct {
+	Name   string
+	Fields []VariantField
+}
+
+type EnumT struct {
+	Node     *ast.TypeDeclStmt
+	Name     string
+	State    ResolutionState
+	Variants []EnumVariant
+}
+
+func (et *EnumT) typ()                      {}
+func (et *EnumT) GetState() ResolutionState { return et.State }
+func (et *EnumT) getName() string           { return et.Name }
+func (et *EnumT) GetVariant(name string) (int, *EnumVariant, error) {
+	for idx, v := range et.Variants {
+		if v.Name == name {
+			return idx, &et.Variants[idx], nil
+		}
+	}
+	return 0, nil, fmt.Errorf("enum `%s` has no member `%s`", et.Name, name)
+}
+
 type StructField struct {
 	Node *ast.Field
 	Name string
@@ -115,12 +145,23 @@ type StructT struct {
 	Node   *ast.TypeDeclStmt
 	Name   string
 	State  ResolutionState
-	Fields map[string]StructField
+	Fields []StructField
 }
 
 func (st *StructT) typ()                      {}
 func (st *StructT) GetState() ResolutionState { return st.State }
 func (st *StructT) getName() string           { return st.Name }
+func (st *StructT) GetField(name string) (int, *StructField, error) {
+	if len(st.Fields) < 1 {
+		return 0, nil, fmt.Errorf("struct `%s` has no fields", st.Name)
+	}
+	for idx, f := range st.Fields {
+		if f.Name == name {
+			return idx, &st.Fields[idx], nil
+		}
+	}
+	return 0, nil, fmt.Errorf("struct `%s` has no field `%s`", st.Name, name)
+}
 
 type PrimitiveType struct {
 	Name string
@@ -137,6 +178,7 @@ var (
 	BoolT    = &PrimitiveType{Name: "bool"}
 	VoidT    = &PrimitiveType{Name: "void"}
 	InvalidT = &PrimitiveType{Name: "invalid"}
+	TypeRefT = &PrimitiveType{Name: "typeRef"}
 	SelfT    = &PrimitiveType{Name: "self"}
 	PrintT   = &FunctionT{
 		Name: "print",
@@ -175,6 +217,52 @@ var (
 	printV = &FunctionV{Name: "print", Type: PrintT}
 )
 
+type VariantArg struct {
+	Node  *ast.Argument
+	Name  string
+	Value Value
+}
+
+type EnumVariantV struct {
+	Tag  int
+	Enum *EnumT
+	Args []VariantArg
+}
+
+func (evv *EnumVariantV) val()          {}
+func (evv *EnumVariantV) GetType() Type { return evv.Enum }
+
+type EnumConstructorV struct {
+	Tag  int
+	Enum *EnumT
+}
+
+func (ecv *EnumConstructorV) val()          {}
+func (ecv *EnumConstructorV) GetType() Type { return TypeRefT }
+
+type EnumV struct {
+	Name string
+	Type *EnumT
+}
+
+func (ev *EnumV) val()          {}
+func (ev *EnumV) GetType() Type { return TypeRefT }
+
+type ZeroV struct {
+	Type Type
+}
+
+func (zv *ZeroV) val()          {}
+func (zv *ZeroV) GetType() Type { return zv.Type }
+
+type CopyV struct {
+	Node  *ast.CopyExpr
+	Value Value
+}
+
+func (cv *CopyV) val()          {}
+func (cv *CopyV) GetType() Type { return cv.Value.GetType() }
+
 type StructConstructionArg struct {
 	Node  *ast.Argument
 	Name  string
@@ -196,7 +284,7 @@ type StructV struct {
 }
 
 func (sv *StructV) val()          {}
-func (sv *StructV) GetType() Type { return sv.Type }
+func (sv *StructV) GetType() Type { return TypeRefT }
 
 type FunctionV struct {
 	Name string
@@ -231,6 +319,7 @@ type Variable struct {
 	InferredType Type
 	ResolvedType Type
 	Value        Value
+	Owner        *FunctionBody
 }
 
 func (v *Variable) val()          {}
@@ -302,6 +391,41 @@ type Statement interface {
 	GetNode() ast.Node
 	stmt()
 }
+
+type VariableStmt struct {
+	Node  *ast.VarStmt
+	Value *Variable
+}
+
+func (vs *VariableStmt) stmt()             {}
+func (vs *VariableStmt) GetNode() ast.Node { return vs.Node }
+
+type FieldAccess struct {
+	Node      *ast.MemberExpr
+	Container Value
+	Type      Type
+	Index     int
+}
+
+func (fa *FieldAccess) val()          {}
+func (fa *FieldAccess) GetType() Type { return fa.Type }
+func (fa *FieldAccess) GetRoot() Value {
+	v, ok := fa.Container.(*FieldAccess)
+	if ok {
+		return v.GetRoot()
+	} else {
+		return fa.Container
+	}
+}
+
+type AssignStmt struct {
+	Node   *ast.AssignStmt
+	Target Value
+	Value  Value
+}
+
+func (as *AssignStmt) stmt()             {}
+func (as *AssignStmt) GetNode() ast.Node { return as.Node }
 
 type ExpressionStatement struct {
 	Node  ast.Expression
@@ -410,7 +534,6 @@ func (a *Analyzer) collectFunctionType(n *ast.FunctionStmt) {
 
 func (a *Analyzer) collectStructType(st *ast.StructType, stmt *ast.TypeDeclStmt) {
 	t := &StructT{Node: stmt, Name: stmt.Name, State: Resolved}
-	t.Fields = map[string]StructField{}
 	if err := a.CurrentScope.delcareType(t.Name, t); err != nil {
 		a.addError(stmt, err)
 	}
@@ -420,10 +543,23 @@ func (a *Analyzer) collectStructType(st *ast.StructType, stmt *ast.TypeDeclStmt)
 	}
 }
 
+func (a *Analyzer) collectEnumT(et *ast.EnumType, stmt *ast.TypeDeclStmt) {
+	t := &EnumT{Node: stmt, Name: stmt.Name, State: Resolved}
+	if err := a.CurrentScope.delcareType(t.Name, t); err != nil {
+		a.addError(stmt, err)
+	}
+	v := &EnumV{Name: t.Name, Type: t}
+	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
+		a.addError(stmt, err)
+	}
+}
+
 func (a *Analyzer) collectTypeDeclStmt(stmt *ast.TypeDeclStmt) {
 	switch t := stmt.Definition.(type) {
 	case *ast.StructType:
 		a.collectStructType(t, stmt)
+	case *ast.EnumType:
+		a.collectEnumT(t, stmt)
 	}
 }
 
@@ -485,7 +621,31 @@ func (a *Analyzer) resolveStructT(t *StructT) {
 		} else {
 			field.Type = ft
 		}
-		t.Fields[field.Name] = field
+		t.Fields = append(t.Fields, field)
+	}
+}
+
+func (a *Analyzer) resolveEnumT(t *EnumT) {
+	node := t.Node.Definition
+	def, ok := node.(*ast.EnumType)
+	if !ok {
+		a.errorF(t.Node, "`%s` is not an enum", t.Node.Name)
+	}
+	for _, m := range def.Members {
+		variant := EnumVariant{Name: m.Name}
+		for _, f := range m.Fields {
+			field := VariantField{Node: f, Name: f.Name}
+			tname := getTypeName(f.Type)
+			fieldT, err := a.CurrentScope.lookupType(tname)
+			if err != nil {
+				a.addError(f, err)
+				field.Type = InvalidT
+			} else {
+				field.Type = fieldT
+			}
+			variant.Fields = append(variant.Fields, field)
+		}
+		t.Variants = append(t.Variants, variant)
 	}
 }
 
@@ -496,6 +656,8 @@ func (a *Analyzer) pass2() {
 			a.resolveFunctionT(t)
 		case *StructT:
 			a.resolveStructT(t)
+		case *EnumT:
+			a.resolveEnumT(t)
 		}
 	}
 }
@@ -520,10 +682,44 @@ func (a *Analyzer) resolveReturnStmt(fb *FunctionBody, stmt *ast.ReturnStmt) {
 	fb.Body = append(fb.Body, s)
 }
 
+func (a *Analyzer) resolveAssignStmt(stmt *ast.AssignStmt, fb *FunctionBody) {
+	as := &AssignStmt{Node: stmt}
+	target := a.resolveExpr(stmt.Target)
+	switch t := target.(type) {
+	case *FieldAccess:
+		root := t.GetRoot()
+		_, ok := root.(*Variable)
+		if !ok {
+			a.errorF(stmt.Target, "cannot assign to a field of parameter `%s`",
+				root.GetType().getName())
+			return
+		}
+		as.Target = t
+	case *Variable:
+		as.Target = t
+	default:
+		a.errorF(stmt.Target, "invalid assign target: `%T`", target)
+		return
+	}
+	as.Value = a.resolveExpr(stmt.Value)
+	if as.Value.GetType() == InvalidT || as.Target.GetType() == InvalidT {
+		return
+	}
+	if err := identical(as.Target.GetType(), as.Value.GetType()); err != nil {
+		a.addError(stmt.Value, err)
+		return
+	}
+	fb.Body = append(fb.Body, as)
+}
+
 func (a *Analyzer) resolveFunctionBodyStmt(fb *FunctionBody, stmt ast.Statement) {
 	switch t := stmt.(type) {
 	case *ast.ReturnStmt:
 		a.resolveReturnStmt(fb, t)
+	case *ast.VarStmt:
+		a.resolveVarStmt(t, fb)
+	case *ast.AssignStmt:
+		a.resolveAssignStmt(t, fb)
 	}
 }
 
@@ -572,7 +768,7 @@ func (a *Analyzer) pass4() {
 	}
 }
 
-func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt) {
+func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt, fb *FunctionBody) {
 	v := &Variable{Node: stmt, Name: stmt.Name.Literal}
 	if stmt.Type != nil {
 		tname := getTypeName(stmt.Type)
@@ -600,13 +796,19 @@ func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt) {
 		if err := identical(v.DeclaredType, v.InferredType); err != nil {
 			a.addError(stmt, err)
 			v.ResolvedType = InvalidT
+		} else {
+			v.ResolvedType = v.DeclaredType
 		}
-		v.ResolvedType = v.DeclaredType
 	case v.DeclaredType == nil:
 		v.ResolvedType = v.InferredType
 	}
 	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
 		a.addError(stmt, err)
+	}
+	if fb != nil {
+		v.Owner = fb
+		vs := &VariableStmt{Node: stmt, Value: v}
+		fb.Body = append(fb.Body, vs)
 	}
 }
 
@@ -614,7 +816,7 @@ func (a *Analyzer) pass3(prog *ast.Program) {
 	for _, stmt := range prog.Statements {
 		switch t := stmt.(type) {
 		case *ast.VarStmt:
-			a.resolveVarStmt(t)
+			a.resolveVarStmt(t, nil)
 		}
 	}
 }
@@ -799,10 +1001,12 @@ func (a *Analyzer) resolveStructConstruction(st *StructT, expr *ast.CallExpr) Va
 		a.errorF(expr, "too many arguments to constructor for struct `%s`", st.Name)
 		return InvalidV
 	}
-	for n, f := range st.Fields {
-		_, arg, err := getArgByName(expr.Args, n)
+	for _, f := range st.Fields {
+		_, arg, err := getArgByName(expr.Args, f.Name)
 		if err != nil {
 			if hasZeroValue(f.Type) {
+				sc.Args = append(sc.Args,
+					StructConstructionArg{Name: f.Name, Value: &ZeroV{Type: f.Type}})
 				continue
 			}
 			a.addError(expr, err)
@@ -817,21 +1021,85 @@ func (a *Analyzer) resolveStructConstruction(st *StructT, expr *ast.CallExpr) Va
 			a.addError(arg, err)
 			return InvalidV
 		}
-		scArg := StructConstructionArg{Node: arg, Name: n, Value: argV}
+		scArg := StructConstructionArg{Node: arg, Name: f.Name, Value: argV}
 		sc.Args = append(sc.Args, scArg)
 	}
 	return sc
 }
 
+func (a *Analyzer) resolveVariantConstruction(
+	e *EnumT, tag int, variant *EnumVariant, expr *ast.CallExpr,
+) Value {
+	var args []VariantArg
+	for _, f := range variant.Fields {
+		_, arg, err := getArgByName(expr.Args, f.Name)
+		if err != nil {
+			a.addError(expr, err)
+			args = append(args, VariantArg{Name: f.Name, Value: InvalidV})
+			continue
+		}
+		argValue := a.resolveExpr(arg.Value)
+		args = append(args, VariantArg{Name: f.Name, Value: argValue})
+	}
+	return &EnumVariantV{Enum: e, Tag: tag, Args: args}
+}
+
 func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr) Value {
 	leftVal := a.resolveExpr(expr.Left)
+	switch t := leftVal.(type) {
+	case *StructV:
+		return a.resolveStructConstruction(t.Type, expr)
+	case *EnumConstructorV:
+		variant := &t.Enum.Variants[t.Tag]
+		return a.resolveVariantConstruction(t.Enum, t.Tag, variant, expr)
+	}
 	switch t := leftVal.GetType().(type) {
 	case *FunctionT:
 		return a.resolveFunctionCall(t, expr)
-	case *StructT:
-		return a.resolveStructConstruction(t, expr)
 	}
 	return InvalidV
+}
+
+func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr) Value {
+	cv := &CopyV{Node: expr}
+	cv.Value = a.resolveExpr(expr.Value)
+	return cv
+}
+
+func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr) Value {
+	container := a.resolveExpr(expr.Container)
+	switch t := container.(type) {
+	case *EnumV:
+		enumT := t.Type
+		idx, variant, err := enumT.GetVariant(expr.Member)
+		if err != nil {
+			a.addError(expr, err)
+			return InvalidV
+		}
+		if len(variant.Fields) > 0 {
+			return &EnumConstructorV{Tag: idx, Enum: enumT}
+		} else {
+			return &EnumVariantV{Tag: idx, Enum: enumT}
+		}
+	}
+	containerT := container.GetType()
+	if containerT == InvalidT {
+		return InvalidV
+	}
+
+	switch t := containerT.(type) {
+	case *StructT:
+		idx, field, err := t.GetField(expr.Member)
+		if err != nil {
+			a.addError(expr, err)
+			return InvalidV
+		}
+		return &FieldAccess{Node: expr, Container: container,
+			Index: idx, Type: field.Type}
+	default:
+		a.errorF(expr.Container, "container value not currently supported")
+		return InvalidV
+	}
 }
 
 func (a *Analyzer) resolveExpr(expr ast.Expression) Value {
@@ -850,12 +1118,10 @@ func (a *Analyzer) resolveExpr(expr ast.Expression) Value {
 		return a.resolveInfixExpr(t)
 	case *ast.CallExpr:
 		return a.resolveCallExpr(t)
-		// case *ast.IdentifierExpr:
-		// 	return a.analyzeIdentifierExpr(t)
-		// default:
-		// 	err := fmt.Errorf("invalid expression: `%s`", expr.String())
-		// 	a.addError(expr, err)
-		// 	return &InvalidValue{Node: expr}
+	case *ast.CopyExpr:
+		return a.resolveCopyExpr(t)
+	case *ast.MemberExpr:
+		return a.resolveMemberExpr(t)
 	}
 	return InvalidV
 }
