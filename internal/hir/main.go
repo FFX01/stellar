@@ -164,7 +164,7 @@ type SliceT struct {
 
 func (st *SliceT) typ()                      {}
 func (st *SliceT) GetState() ResolutionState { return Resolved }
-func (st *SliceT) getName() string           { return "slice" }
+func (st *SliceT) getName() string           { return "[]" + st.ElementType.getName() }
 
 type Field struct {
 	Node *ast.Field
@@ -211,12 +211,21 @@ var (
 	InvalidT = &PrimitiveType{Name: "invalid"}
 	TypeRefT = &PrimitiveType{Name: "typeRef"}
 	SelfT    = &PrimitiveType{Name: "self"}
+	AnyT     = &PrimitiveType{Name: "any"}
 	PrintT   = &FunctionT{
 		Name: "print",
 		Params: []FParam{
 			{Name: "value", Type: StrT},
 		},
 		ReturnType: VoidT,
+		RState:     Resolved,
+	}
+	LenT = &FunctionT{
+		Name: "len",
+		Params: []FParam{
+			{Name: "value", Type: &SliceT{ElementType: AnyT}},
+		},
+		ReturnType: IntT,
 		RState:     Resolved,
 	}
 )
@@ -244,7 +253,10 @@ type Value interface {
 	GetType() Type
 }
 
-var printV = &FunctionV{Name: "print", Type: PrintT}
+var (
+	PrintV = &FunctionV{Name: "print", Type: PrintT}
+	LenV   = &FunctionV{Name: "len", Type: LenT}
+)
 
 type VariantConstruction struct {
 	Type *VariantT
@@ -374,6 +386,15 @@ type InvalidValue struct{}
 
 func (iv *InvalidValue) val()          {}
 func (iv *InvalidValue) GetType() Type { return InvalidT }
+
+type SeqLiteral struct {
+	Node   *ast.SequenceLiteral
+	Values []Value
+	Type   Type
+}
+
+func (sl *SeqLiteral) val()          {}
+func (sl *SeqLiteral) GetType() Type { return sl.Type }
 
 type IntLiteral struct {
 	Node  *ast.IntegerLiteralExpr
@@ -596,9 +617,11 @@ func newUniverse() *Scope {
 		"bool":  BoolT,
 		"void":  VoidT,
 		"print": PrintT,
+		"len":   LenT,
 	}
 	u.Values = map[string]Value{
-		"print": printV,
+		"print": PrintV,
+		"len":   LenV,
 	}
 	return u
 }
@@ -796,7 +819,7 @@ func (a *Analyzer) resolveReturnStmt(
 ) {
 	var v Value
 	if stmt.Value != nil {
-		v = a.resolveExpr(stmt.Value, fb)
+		v = a.resolveExpr(stmt.Value, fb, fb.Type.ReturnType)
 	} else {
 		v = nil
 	}
@@ -808,7 +831,7 @@ func (a *Analyzer) resolveAssignStmt(
 	fb *FunctionBody, block *Block, stmt *ast.AssignStmt,
 ) {
 	as := &AssignStmt{Node: stmt}
-	target := a.resolveExpr(stmt.Target, fb)
+	target := a.resolveExpr(stmt.Target, fb, nil)
 	switch t := target.(type) {
 	case *FieldAccess:
 		root := t.GetRoot()
@@ -829,7 +852,7 @@ func (a *Analyzer) resolveAssignStmt(
 		return
 	}
 
-	val := a.resolveExpr(stmt.Value, fb)
+	val := a.resolveExpr(stmt.Value, fb, as.Target.GetType())
 	if !a.requireValue(stmt.Value, val) {
 		as.Value = InvalidV
 	} else {
@@ -851,7 +874,7 @@ func (a *Analyzer) resolveIf(
 ) *If {
 	ifV := &If{Node: expr, Type: VoidT}
 
-	ifV.Condition = a.resolveExpr(expr.Condition, fb)
+	ifV.Condition = a.resolveExpr(expr.Condition, fb, nil)
 	if t := ifV.Condition.GetType(); t != InvalidT {
 		if err := identical(t, BoolT); err != nil {
 			a.addError(expr.Condition, err)
@@ -908,7 +931,7 @@ func (a *Analyzer) resolveBranch(
 	case *ast.SwitchExpr:
 		return yieldBlock(t, a.resolveSwitch(t, fb, asValue))
 	default:
-		return yieldBlock(t, a.resolveExpr(t, fb))
+		return yieldBlock(t, a.resolveExpr(t, fb, nil))
 	}
 }
 
@@ -945,7 +968,7 @@ func (a *Analyzer) resolveSwitchArm(
 	if id, ok := node.Case.(*ast.IdentifierExpr); ok && id.Value == "_" {
 		arm.IsDefault = true
 	} else {
-		arm.Condition = a.resolveExpr(node.Case, fb)
+		arm.Condition = a.resolveExpr(node.Case, fb, nil)
 	}
 
 	switch {
@@ -992,7 +1015,7 @@ func (a *Analyzer) resolveSwitch(
 ) *Switch {
 	sw := &Switch{Node: expr, Type: VoidT}
 	if expr.Subject != nil {
-		sw.Subject = a.resolveExpr(expr.Subject, fb)
+		sw.Subject = a.resolveExpr(expr.Subject, fb, nil)
 	}
 
 	for idx, arm := range expr.Arms {
@@ -1023,7 +1046,7 @@ func (a *Analyzer) resolveExprStmt(
 		block.Statements = append(block.Statements,
 			&ExpressionStatement{Node: t, Value: sv})
 	default:
-		v := a.resolveExpr(t, fb)
+		v := a.resolveExpr(t, fb, nil)
 		es := &ExpressionStatement{Node: stmt.Expression, Value: v}
 		block.Statements = append(block.Statements, es)
 	}
@@ -1054,7 +1077,7 @@ func (a *Analyzer) resolveStmts(
 func (a *Analyzer) resolveYieldStmt(
 	fb *FunctionBody, block *Block, stmt *ast.EmitStmt,
 ) {
-	v := a.resolveExpr(stmt.Value, fb)
+	v := a.resolveExpr(stmt.Value, fb, nil)
 	block.Statements = append(block.Statements, &YieldStmt{Node: stmt.Value, Value: v})
 	block.Type = v.GetType()
 }
@@ -1085,7 +1108,7 @@ func (a *Analyzer) resolveFunctionBodyStmt(
 }
 
 func (a *Analyzer) resolveFunctionBodyExpr(fb *FunctionBody, expr ast.Expression) {
-	v := a.resolveExpr(expr, fb)
+	v := a.resolveExpr(expr, fb, nil)
 	rs := a.checkReturn(fb, expr, v)
 	fb.Body.Statements = append(fb.Body.Statements, rs)
 }
@@ -1179,7 +1202,7 @@ func (a *Analyzer) resolveVarStmt(
 	if stmt.Type != nil {
 		v.DeclaredType = a.resolveType(stmt.Type)
 	}
-	val := a.resolveExpr(stmt.Value, fb)
+	val := a.resolveExpr(stmt.Value, fb, v.DeclaredType)
 	if val == InvalidV || !a.requireValue(stmt.Value, val) {
 		v.Value = InvalidV
 		v.InferredType = InvalidT
@@ -1250,6 +1273,8 @@ func foldConst(v Value) (Value, error) {
 			return nil, err
 		}
 		return foldBinaryValue(t.Op, l, r)
+	case *SeqLiteral:
+		return v, nil
 	default:
 		return nil, fmt.Errorf("unsupported const value")
 	}
@@ -1257,7 +1282,6 @@ func foldConst(v Value) (Value, error) {
 
 func (a *Analyzer) resolveConstant(stmt *ast.VarStmt) {
 	if !a.checkConstExpr(stmt.Value) {
-		a.errorF(stmt.Value, "compile time constants must be primitives, containers of primitices, or basic arithmatic on primitives")
 		return
 	}
 	c := &Constant{Node: stmt, Name: stmt.Name.Literal}
@@ -1266,10 +1290,10 @@ func (a *Analyzer) resolveConstant(stmt *ast.VarStmt) {
 		declaredType = a.resolveType(stmt.Type)
 		if declaredType == VoidT {
 			a.errorF(stmt.Type, "`void` is not a valid type here")
+			declaredType = InvalidT
 		}
-		declaredType = InvalidT
 	}
-	val := a.resolveExpr(stmt.Value, nil)
+	val := a.resolveExpr(stmt.Value, nil, declaredType)
 	if val == InvalidV {
 		return
 	}
@@ -1385,8 +1409,8 @@ func getBinaryType(op Operator, operand Type) (Type, error) {
 
 func (a *Analyzer) resolveInfixExpr(expr *ast.InfixExpr, fb *FunctionBody) Value {
 	bv := &BinaryValue{Node: expr}
-	bv.Left = a.resolveExpr(expr.Left, fb)
-	bv.Right = a.resolveExpr(expr.Right, fb)
+	bv.Left = a.resolveExpr(expr.Left, fb, nil)
+	bv.Right = a.resolveExpr(expr.Right, fb, nil)
 	op, ok := OpMap[expr.Operator]
 	if !ok {
 		a.errorF(expr, "invalid operator `%s`", expr.Operator)
@@ -1451,7 +1475,7 @@ func (a *Analyzer) resolveFunctionCall(
 				return fc
 			}
 		}
-		argV := a.resolveExpr(arg.Value, fb)
+		argV := a.resolveExpr(arg.Value, fb, p.Type)
 		if !a.requireValue(arg, argV) {
 			return fc
 		}
@@ -1497,7 +1521,7 @@ func (a *Analyzer) resolveStructConstruction(
 			a.addError(expr, err)
 			return InvalidV
 		}
-		argV := a.resolveExpr(arg.Value, fb)
+		argV := a.resolveExpr(arg.Value, fb, f.Type)
 		if !a.requireValue(arg, argV) {
 			return InvalidV
 		}
@@ -1526,7 +1550,7 @@ func (a *Analyzer) resolveVariantConstruction(
 			args = append(args, NamedArg{Name: f.Name, Value: InvalidV})
 			continue
 		}
-		argValue := a.resolveExpr(arg.Value, fb)
+		argValue := a.resolveExpr(arg.Value, fb, f.Type)
 		if !a.requireValue(arg, argValue) {
 			return InvalidV
 		}
@@ -1536,7 +1560,7 @@ func (a *Analyzer) resolveVariantConstruction(
 }
 
 func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
-	leftVal := a.resolveExpr(expr.Left, fb)
+	leftVal := a.resolveExpr(expr.Left, fb, nil)
 	switch t := leftVal.(type) {
 	case *StructV:
 		return a.resolveStructConstruction(t.Type, expr, fb)
@@ -1676,12 +1700,12 @@ func foldBinaryValue(op Operator, l, r Value) (Value, error) {
 
 func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr, fb *FunctionBody) Value {
 	cv := &CopyV{Node: expr}
-	cv.Value = a.resolveExpr(expr.Value, fb)
+	cv.Value = a.resolveExpr(expr.Value, fb, nil)
 	return cv
 }
 
 func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Value {
-	container := a.resolveExpr(expr.Container, fb)
+	container := a.resolveExpr(expr.Container, fb, nil)
 	switch t := container.(type) {
 	case *CaseBinding:
 		switch c := t.Case.(type) {
@@ -1758,7 +1782,48 @@ func yieldBlock(node ast.Expression, v Value) *Block {
 	}
 }
 
-func (a *Analyzer) resolveExpr(expr ast.Expression, fb *FunctionBody) Value {
+func (a *Analyzer) resolveSequenceLiteral(
+	s *ast.SequenceLiteral, fb *FunctionBody, targetT Type,
+) Value {
+	var want Type
+	st, ok := targetT.(*SliceT)
+	if ok {
+		want = st.ElementType
+	}
+
+	sl := &SeqLiteral{Node: s}
+	if len(s.Elements) < 1 && st != nil {
+		sl.Type = st
+		return sl
+	}
+
+	for _, el := range s.Elements {
+		elval := a.resolveExpr(el, fb, want)
+		if elval == InvalidV || elval.GetType() == InvalidT {
+			return InvalidV
+		}
+		if want == nil {
+			want = elval.GetType()
+		} else if err := identical(want, elval.GetType()); err != nil {
+			a.addError(el, err)
+			return InvalidV
+		}
+		sl.Values = append(sl.Values, elval)
+	}
+
+	if want == nil {
+		a.errorF(s, "unable to infer sequence literal type")
+		return InvalidV
+	} else {
+		sl.Type = &SliceT{ElementType: want}
+	}
+
+	return sl
+}
+
+func (a *Analyzer) resolveExpr(
+	expr ast.Expression, fb *FunctionBody, targetT Type,
+) Value {
 	switch t := expr.(type) {
 	case *ast.IntegerLiteralExpr:
 		return &IntLiteral{Node: t, Value: int(t.Value)}
@@ -1782,6 +1847,8 @@ func (a *Analyzer) resolveExpr(expr ast.Expression, fb *FunctionBody) Value {
 		return a.resolveIf(t, fb, true)
 	case *ast.SwitchExpr:
 		return a.resolveSwitch(t, fb, true)
+	case *ast.SequenceLiteral:
+		return a.resolveSequenceLiteral(t, fb, targetT)
 	}
 	return InvalidV
 }

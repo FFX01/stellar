@@ -2,7 +2,6 @@ package hir
 
 import (
 	"fmt"
-	"log"
 )
 
 func identical(a, b Type) error {
@@ -10,6 +9,10 @@ func identical(a, b Type) error {
 		return fmt.Errorf("nil type")
 	}
 	defaultErr := fmt.Errorf("type `%s` != type `%s`", a.getName(), b.getName())
+
+	if a == AnyT || b == AnyT {
+		return nil
+	}
 
 	switch at := a.(type) {
 	case *PrimitiveType:
@@ -30,7 +33,6 @@ func identical(a, b Type) error {
 	case *EnumT:
 		bt, isEnum := b.(*EnumT)
 		vt, isVariant := b.(*VariantT)
-		log.Printf("%T %T", at, bt)
 		switch {
 		case isEnum && at != bt:
 			return defaultErr
@@ -52,6 +54,12 @@ func identical(a, b Type) error {
 			return defaultErr
 		}
 		return nil
+	case *SliceT:
+		bt, ok := b.(*SliceT)
+		if !ok {
+			return defaultErr
+		}
+		return identical(at.ElementType, bt.ElementType)
 	default:
 		return fmt.Errorf("unknown type `%T`", a)
 	}
