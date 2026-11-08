@@ -46,6 +46,8 @@ func identical(a, b Type) error {
 		vt, isVariant := b.(*VariantT)
 		et, isEnum := b.(*EnumT)
 		switch {
+		case isVariant && at.Enum == vt.Enum:
+			return nil
 		case isVariant && at != vt:
 			return defaultErr
 		case isEnum:
