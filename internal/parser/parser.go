@@ -182,6 +182,10 @@ func (p *Parser) parseSwitchArm() *ast.SwitchArm {
 	tok := p.cur()
 	n := &ast.SwitchArm{Token: tok}
 	n.Case = p.parseExpression(PLowest)
+	if p.check(lexer.AS) {
+		p.advance()
+		n.Binding = p.parseIdentifierExpr().(*ast.IdentifierExpr)
+	}
 	p.expect(lexer.FAT_ARROW)
 	if p.check(lexer.LBRACE) {
 		n.Value = p.parseBlockExpr()

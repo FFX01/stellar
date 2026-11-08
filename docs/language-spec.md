@@ -84,7 +84,7 @@ Every other type, built-in or user-defined, is `PascalCase` (`Result`, `Maybe`, 
 
 ### 2.3 Keywords
 ```
-if  else  switch  for  in  break  continue  return
+if  else  switch  for  in  as  break  continue  return
 var  mut  fn  type  impl  struct  enum  interface  pub  import
 try  must  and  or  true  false  Ok  Err  Some  None
 ```
@@ -215,7 +215,9 @@ type Action enum {
 - A variant with fields is a constructor, and like a struct constructor (§3.4) it is not a
   value: `Action.Add` alone can only be called (`Action.Add(title="x")`) or named as a
   `switch` arm (§6.10). `f(Action.Add)` and `var a = Action.Add;` are errors.
-- A variant is read through `switch` (§6.10).
+- A variant's fields are read through an `as` binding in a `switch` arm (§6.10). There is no
+  pattern matching or destructuring.
+- Comparing enum values with `==`: §9.1.
 - `Result` and `Maybe` are built-in enums with special support in the checker (§8).
 
 ### 3.6 Tuples
@@ -574,16 +576,25 @@ var sign = if n < 0 { >> -1; } else { >> 1; };
 - The condition must be a `bool`. It isn't parenthesized.
 - The `then` part is always a braced block. The `else` part may be a block, another `if`, or
   any expression.
-- As a value, both branches must have the same type. Without `else`, the type is `void`
-  **[working]**.
+- **As a value**, both branches must have the same type. A branch that diverges (`return`, or
+  `break`/`continue` aimed at a loop outside the `if`) takes the other branch's type. Without
+  `else`, the type is `void`, so the `if` can't be stored or passed (§3.1).
+- **As a statement**, the type is `void` and the branch types aren't compared, because their
+  values are discarded.
 
 ### 6.10 `switch`
-`switch` selects by comparing values. It doesn't destructure.
+`switch` selects by comparing values. It doesn't destructure, and it isn't pattern matching.
 ```solr
 var name = switch dir {
     Dir.North => "n",
     Dir.South => "s",
     _ => "other"
+};
+
+var text = switch action {
+    Action.Add as a => "add " + a.title,   // `a` is the subject, typed as `Action.Add`
+    Action.Complete as c => "complete " + str(c.id),
+    Action.Quit => "quit"
 };
 
 switch {                               // no subject: each case is a bool
@@ -592,24 +603,40 @@ switch {                               // no subject: each case is a bool
     _ => log.print("positive")
 }
 ```
-- **Arms** are `case => value`, separated by commas. A trailing comma is allowed. After an arm
-  whose value is a block, the comma is optional.
+- **Arms** are `case [as name] => value`, separated by commas. A trailing comma is allowed.
+  After an arm whose value is a block, the comma is optional.
+- **The subject** is evaluated once. Its type must be `int`, `str`, `bool`, or an enum. A
+  `float` subject is an error: write `switch { x == 1.0 => … }`. A struct subject is an error
+  until struct equality exists (§9.1).
+- **Cases, with a subject,** must be compile-time constants of the subject's type: literals,
+  package-level constants (§4.6), or enum variants. For a dynamic test, use the form without a
+  subject. The parser accepts any expression; the checker rejects the rest.
+- **Enum cases** are written qualified (`Action.Add`, not `Add`) and match by variant only.
+  The payload is ignored. A variant with fields is allowed here even though it isn't a value
+  (§3.5). Type tests (`is`) are **[open]**.
+- **Without a subject**, each case is a `bool` expression. Cases are evaluated in order, and
+  the first true one wins.
 - `_` matches anything and is the default arm. It must be last.
-- Without a subject, each case is a `bool` expression and the first true one wins.
-- With a subject, each case is compared to it with `==`.
-- **Narrowing [provisional]:** inside an arm whose case is an enum variant, the subject
-  variable is known to be that variant, so its fields are readable:
-  ```solr
-  switch action {
-      Action.Add => "add " + action.title,
-      Action.Complete => "complete " + str(action.id),
-      Action.Quit => "quit"
-  }
-  ```
-  Binding the fields in the case (`Action.Add(title) =>`) and an `is` test are **[open]**.
-- The checker requires the arms to cover every variant when the subject is an enum, or to
-  include `_` **[provisional]**.
-- All arms must have the same type.
+- **Duplicate cases** are an error.
+- **Exhaustiveness** is required, as a value and as a statement. An enum subject must list
+  every variant or have `_`. Every other subject, and the form without a subject, must have
+  `_`. A default that does nothing is written `_ => {}`.
+- **`as name`** binds the subject's value in that arm. The binding is immutable, and it is a
+  copy, so assigning the subject inside the arm doesn't change it.
+  - With an enum-variant case, its type is that variant, so its fields are readable
+    (`a.title`). This is the only way to read a variant's fields. The subject itself is not
+    narrowed: `switch action { Action.Add => action.title }` is an error.
+  - With any other case, including `_`, its type is the subject's type. This names the value
+    of a subject that is not a variable, such as `switch f() { _ as v => … }`.
+  - `as` in a `switch` without a subject is an error: there is no subject value.
+- **Scopes:** like a function's parameters (§4.2), an arm's binding and the top level of its
+  block are one scope. An expression arm (`Action.Add as a => a.title`) gets a scope for its
+  binding, as an expression-bodied function does.
+- **As a value**, all arms must have the same type. An arm that diverges (`return`, or
+  `break`/`continue` aimed at a loop outside the `switch`) takes the other arms' type. A
+  `break` aimed at a loop *inside* the arm doesn't make the arm diverge.
+- **As a statement**, the type is `void` and the arm types aren't compared.
+- Several values per arm (`1 | 2 =>`) is **[deferred]**.
 
 ### 6.11 `for`
 Three forms, all expressions:
@@ -761,7 +788,13 @@ Operand types must be the same. There is no implicit conversion.
 
 - `1 + 1.0` and `7.0 / 2` are errors. Write `7.0 / 2.0`.
 - `==` between different types is a **compile error**, not `false`.
-- Comparing structs and enums with `==` is **[open]**.
+- **Enums:** `==` and `!=` compare variants, and are allowed only where that is the whole
+  value: when no variant of the enum has fields (`d1 == d2` on a `Dir`), or when one side is a
+  variant without fields (`a == Action.Quit`). Any other enum comparison is an error, including
+  `a == b` on two `Action`s and `a == Action.Add`: use `switch` (§6.10).
+- **Structs:** `==` and the ordering operators are errors. **[planned]** A type will support
+  them by implementing a built-in `Comparable` interface (`eq`, `lt`, `gt`). The same will
+  apply to enums with payloads. This depends on built-in interfaces (§3.7).
 - The order of `str` values (bytes or code points) is **[open]**.
 
 ### 9.2 Division and remainder
@@ -899,7 +932,7 @@ prefix       = literal | ident | '(' expr ')' | '[' list(expr | '...' expr) ']'
              | 'for' [ ident ',' ident 'in' ] [ expr ] block
              | 'fn' '(' list(param) ')' [ '->' type ] ( block | ':' expr )
              | block ;
-arm          = expr '=>' ( block | expr ) ;
+arm          = expr [ 'as' ident ] '=>' ( block | expr ) ;
 infix        = binop expr
              | '(' list(arg) ')'
              | '[' [ expr ] [ ':' [ expr ] ] ']'
@@ -1009,8 +1042,8 @@ type Action enum {
 
 fn describe(a: Action) -> str {
     return switch a {
-        Action.Add => "add " + a.title,
-        Action.Complete => "complete " + str(a.id),
+        Action.Add as add => "add " + add.title,
+        Action.Complete as c => "complete " + str(c.id),
         Action.Quit => "quit"
     };
 }
@@ -1174,14 +1207,15 @@ Consolidated from the markers above.
 - Tuple syntax, element access, destructuring.
 - `Maybe` vs `Result`: which absences are which?
 - Constraint syntax for generics.
-- Equality of structs and enums (`==`).
+- Built-in interfaces: `Comparable` for `==` and ordering on structs and enums (§9.1), and
+  how built-in interfaces are declared (in the universe scope, like `print`).
 - Is a struct that contains itself directly (`type N struct { next: N }`, with no `?` or slice
   in between) an error? It can never be constructed.
 - Map type and literal syntax. Fixed-length arrays.
 
 **Syntax**
 - Calling a function stored in a field.
-- `switch`: field binding in the case, `is`, and several values per arm (`1 | 2 =>`).
+- `switch`: `is` type tests, and several values per arm (`1 | 2 =>`).
 - Format strings and interpolation. The exact escape set.
 - Static functions (`Type.fn`). Whether a module is a file or a directory.
 

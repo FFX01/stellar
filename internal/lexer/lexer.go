@@ -83,6 +83,7 @@ const (
 	M_NONE       T_Token = "M_NONE"
 	QUESTION     T_Token = "QUESTION"
 	SPREAD       T_Token = "SPREAD"
+	AS           T_Token = "AS"
 )
 
 var keywords = map[string]T_Token{
@@ -114,6 +115,7 @@ var keywords = map[string]T_Token{
 	"Err":       R_ERR,
 	"Some":      M_SOME,
 	"None":      M_NONE,
+	"as":        AS,
 }
 
 func lookupIdent(ident string) T_Token {

@@ -10,6 +10,12 @@ fn main() -> Action! {
         2 => 3,
         _ => 4,
     }
+    switch action {
+        Action.Add as a => add(a.title),
+        Action.List => listAll(),
+        Action.Delete as a => delete(a.id),
+        Action.Update as a => update(a.id, a.title)
+    }
     return switch c {
         "hello" => "world",
         "world" => {

@@ -785,7 +785,7 @@ func (a *Analyzer) resolveAssignStmt(
 		a.addError(stmt.Value, err)
 		return
 	}
-	fb.Body.Statements = append(fb.Body.Statements, as)
+	block.Statements = append(block.Statements, as)
 }
 
 func (a *Analyzer) resolveIf(

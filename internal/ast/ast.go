@@ -361,18 +361,20 @@ func (i *InfixExpr) String() string {
 }
 
 type SwitchArm struct {
-	Token lexer.Token
-	Case  Expression
-	Value Expression
+	Token   lexer.Token
+	Case    Expression
+	Value   Expression
+	Binding *IdentifierExpr
 }
 
 func (s *SwitchArm) TokenLiteral() string { return s.Token.Literal }
 func (s *SwitchArm) Pos() lexer.Position  { return s.Token.Position }
 func (s *SwitchArm) String() string {
 	return fmt.Sprintf(
-		"MatchArm(%s, %s)",
+		"SwitchArm(%s, %s, %s)",
 		pointerToString(s.Case),
 		pointerToString(s.Value),
+		pointerToString(s.Binding),
 	)
 }
 
