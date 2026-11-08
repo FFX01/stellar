@@ -775,7 +775,7 @@ func (a *Analyzer) resolveAssignStmt(
 	if !a.requireValue(stmt.Value, val) {
 		as.Value = InvalidV
 	} else {
-		as.Value = a.resolveExpr(stmt.Value, fb)
+		as.Value = val
 	}
 
 	if as.Value.GetType() == InvalidT || as.Target.GetType() == InvalidT {
@@ -789,7 +789,7 @@ func (a *Analyzer) resolveAssignStmt(
 }
 
 func (a *Analyzer) resolveIf(
-	expr *ast.IfExpr, fb *FunctionBody,
+	expr *ast.IfExpr, fb *FunctionBody, asValue bool,
 ) *If {
 	ifV := &If{Node: expr, Type: VoidT}
 
@@ -813,12 +813,14 @@ func (a *Analyzer) resolveIf(
 	case *ast.BlockExpr:
 		ifV.Else = a.resolveBlock(fb, t)
 	case *ast.IfExpr:
-		ifV.Else = yieldBlock(t, a.resolveIf(t, fb))
+		ifV.Else = yieldBlock(t, a.resolveIf(t, fb, asValue))
 	default:
 		ifV.Else = yieldBlock(t, a.resolveExpr(t, fb))
 	}
 
-	ifV.Type = a.getIfType(ifV)
+	if asValue {
+		ifV.Type = a.getIfType(ifV)
+	}
 
 	return ifV
 }
@@ -846,7 +848,7 @@ func (a *Analyzer) resolveExprStmt(
 ) {
 	switch t := stmt.Expression.(type) {
 	case *ast.IfExpr:
-		ifv := a.resolveIf(t, fb)
+		ifv := a.resolveIf(t, fb, false)
 		block.Statements = append(block.Statements,
 			&ExpressionStatement{Node: t, Value: ifv})
 	default:
@@ -1548,7 +1550,7 @@ func (a *Analyzer) resolveExpr(expr ast.Expression, fb *FunctionBody) Value {
 	case *ast.MemberExpr:
 		return a.resolveMemberExpr(t, fb)
 	case *ast.IfExpr:
-		return a.resolveIf(t, fb)
+		return a.resolveIf(t, fb, true)
 	}
 	return InvalidV
 }
