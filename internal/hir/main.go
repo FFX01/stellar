@@ -6,6 +6,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+
 	"stellar/internal/ast"
 	"stellar/internal/errors"
 
@@ -29,6 +30,7 @@ func newScope(parent *Scope, name string) *Scope {
 	}
 	return s
 }
+
 func (s *Scope) delcareType(name string, typ Type) error {
 	if _, ok := s.Types[name]; ok {
 		return fmt.Errorf("redaclaration of `%s`", name)
@@ -36,6 +38,7 @@ func (s *Scope) delcareType(name string, typ Type) error {
 	s.Types[name] = typ
 	return nil
 }
+
 func (s *Scope) declareValue(name string, val Value) error {
 	if _, ok := s.Values[name]; ok {
 		return fmt.Errorf("redeclaration of `%s`", name)
@@ -43,6 +46,7 @@ func (s *Scope) declareValue(name string, val Value) error {
 	s.Values[name] = val
 	return nil
 }
+
 func (s *Scope) lookupType(name string) (Type, error) {
 	if t, ok := s.Types[name]; ok {
 		if t.GetState() != Resolved {
@@ -55,6 +59,7 @@ func (s *Scope) lookupType(name string) (Type, error) {
 	}
 	return nil, fmt.Errorf("type `%s` not found", name)
 }
+
 func (s *Scope) lookupValue(name string) (Value, error) {
 	if v, ok := s.Values[name]; ok {
 		return v, nil
@@ -112,37 +117,56 @@ type Type interface {
 	getName() string
 }
 
-type VariantField struct {
-	Node *ast.Field
-	Name string
-	Type Type
+type VariantT struct {
+	Node   *ast.EnumMember
+	Name   string
+	Enum   *EnumT
+	Tag    int
+	State  ResolutionState
+	Fields []Field
 }
 
-type EnumVariant struct {
-	Name   string
-	Fields []VariantField
+func (vt *VariantT) typ()                      {}
+func (vt *VariantT) getName() string           { return vt.Enum.Name + "." + vt.Name }
+func (vt *VariantT) GetState() ResolutionState { return vt.State }
+
+func (ev *VariantT) GetField(name string) (int, *Field, error) {
+	for idx, f := range ev.Fields {
+		if f.Name == name {
+			return idx, &ev.Fields[idx], nil
+		}
+	}
+	return 0, nil, fmt.Errorf("`%s` has no field `%s`", ev.Name, name)
 }
 
 type EnumT struct {
 	Node     *ast.TypeDeclStmt
 	Name     string
 	State    ResolutionState
-	Variants []EnumVariant
+	Variants []*VariantT
 }
 
 func (et *EnumT) typ()                      {}
 func (et *EnumT) GetState() ResolutionState { return et.State }
 func (et *EnumT) getName() string           { return et.Name }
-func (et *EnumT) GetVariant(name string) (int, *EnumVariant, error) {
+func (et *EnumT) GetVariant(name string) (int, *VariantT, error) {
 	for idx, v := range et.Variants {
 		if v.Name == name {
-			return idx, &et.Variants[idx], nil
+			return idx, et.Variants[idx], nil
 		}
 	}
 	return 0, nil, fmt.Errorf("enum `%s` has no member `%s`", et.Name, name)
 }
 
-type StructField struct {
+type SliceT struct {
+	ElementType Type
+}
+
+func (st *SliceT) typ()                      {}
+func (st *SliceT) GetState() ResolutionState { return Resolved }
+func (st *SliceT) getName() string           { return "slice" }
+
+type Field struct {
 	Node *ast.Field
 	Name string
 	Type Type
@@ -152,13 +176,13 @@ type StructT struct {
 	Node   *ast.TypeDeclStmt
 	Name   string
 	State  ResolutionState
-	Fields []StructField
+	Fields []Field
 }
 
 func (st *StructT) typ()                      {}
 func (st *StructT) GetState() ResolutionState { return st.State }
 func (st *StructT) getName() string           { return st.Name }
-func (st *StructT) GetField(name string) (int, *StructField, error) {
+func (st *StructT) GetField(name string) (int, *Field, error) {
 	if len(st.Fields) < 1 {
 		return 0, nil, fmt.Errorf("struct `%s` has no fields", st.Name)
 	}
@@ -220,40 +244,37 @@ type Value interface {
 	GetType() Type
 }
 
-var (
-	printV = &FunctionV{Name: "print", Type: PrintT}
-)
+var printV = &FunctionV{Name: "print", Type: PrintT}
 
-type VariantArg struct {
+type VariantConstruction struct {
+	Type *VariantT
+	Args []NamedArg
+}
+
+func (vc *VariantConstruction) val()          {}
+func (vc *VariantConstruction) GetType() Type { return vc.Type }
+
+type NamedArg struct {
 	Node  *ast.Argument
 	Name  string
 	Value Value
 }
 
-type EnumVariantV struct {
-	Tag  int
-	Enum *EnumT
-	Args []VariantArg
+type VariantV struct {
+	Name string
+	Type *VariantT
 }
 
-func (evv *EnumVariantV) val()          {}
-func (evv *EnumVariantV) GetType() Type { return evv.Enum }
-
-type EnumConstructorV struct {
-	Tag  int
-	Enum *EnumT
-}
-
-func (ecv *EnumConstructorV) val()          {}
-func (ecv *EnumConstructorV) GetType() Type { return TypeRefT }
+func (vv *VariantV) val()          {}
+func (vv *VariantV) GetType() Type { return vv.Type }
 
 type EnumV struct {
-	Name string
 	Type *EnumT
+	Name string
 }
 
 func (ev *EnumV) val()          {}
-func (ev *EnumV) GetType() Type { return TypeRefT }
+func (ev *EnumV) GetType() Type { return ev.Type }
 
 type ZeroV struct {
 	Type Type
@@ -270,16 +291,10 @@ type CopyV struct {
 func (cv *CopyV) val()          {}
 func (cv *CopyV) GetType() Type { return cv.Value.GetType() }
 
-type StructConstructionArg struct {
-	Node  *ast.Argument
-	Name  string
-	Value Value
-}
-
 type StructConstruction struct {
 	Node   *ast.CallExpr
 	Callee *StructT
-	Args   []StructConstructionArg
+	Args   []NamedArg
 }
 
 func (sc *StructConstruction) val()          {}
@@ -353,9 +368,7 @@ type BinaryValue struct {
 func (bv *BinaryValue) val()          {}
 func (bv *BinaryValue) GetType() Type { return bv.Type }
 
-var (
-	InvalidV = &InvalidValue{}
-)
+var InvalidV = &InvalidValue{}
 
 type InvalidValue struct{}
 
@@ -413,6 +426,34 @@ type Block struct {
 	Statements []Statement
 	Type       Type
 }
+
+type CaseBinding struct {
+	Node *ast.IdentifierExpr
+	Name string
+	Type Type
+	Case Value
+}
+
+func (cb *CaseBinding) val()          {}
+func (cb *CaseBinding) GetType() Type { return cb.Type }
+
+type SwitchArm struct {
+	Node      *ast.SwitchArm
+	Condition Value
+	Binding   *CaseBinding
+	Body      *Block
+	IsDefault bool
+}
+
+type Switch struct {
+	Node    *ast.SwitchExpr
+	Subject Value
+	Type    Type
+	Arms    []SwitchArm
+}
+
+func (s *Switch) val()          {}
+func (s *Switch) GetType() Type { return s.Type }
 
 type If struct {
 	Node      *ast.IfExpr
@@ -617,12 +658,7 @@ func (a *Analyzer) pass1(prog *ast.Program) {
 
 func (a *Analyzer) resolveFunctionParam(t *FunctionT, p *ast.Parameter) {
 	fp := FParam{Node: p, Name: p.Name}
-	tname := getTypeName(p.Type)
-	typ, err := a.CurrentScope.lookupType(tname)
-	if err != nil {
-		a.addError(p, err)
-		return
-	}
+	typ := a.resolveType(p.Type)
 	if typ == VoidT {
 		a.errorF(p, "`void` is not a valid parameter type")
 		return
@@ -636,17 +672,33 @@ func (a *Analyzer) resolveFunctionT(t *FunctionT) {
 	if !ok {
 		return
 	}
-	rtName := getTypeName(stmt.Signature.ReturnType)
-	rt, err := a.CurrentScope.lookupType(rtName)
-	if err != nil {
-		a.addError(stmt.Signature.ReturnType, err)
-		return
-	}
+	rt := a.resolveType(stmt.Signature.ReturnType)
 	t.ReturnType = rt
 	for _, p := range stmt.Signature.Parameters {
 		a.resolveFunctionParam(t, p)
 	}
 	t.RState = Resolved
+}
+
+func (a *Analyzer) resolveType(node ast.Type) Type {
+	switch t := node.(type) {
+	case nil:
+		return VoidT
+	case *ast.NamedType:
+		tname := t.Name
+		rt, err := a.CurrentScope.lookupType(tname)
+		if err != nil {
+			a.addError(t, err)
+			return InvalidT
+		}
+		return rt
+	case *ast.SliceType:
+		rt := &SliceT{}
+		rt.ElementType = a.resolveType(t.ElementType)
+		return rt
+	default:
+		return InvalidT
+	}
 }
 
 func (a *Analyzer) resolveStructT(t *StructT) {
@@ -657,13 +709,9 @@ func (a *Analyzer) resolveStructT(t *StructT) {
 		return
 	}
 	for _, f := range stmt.Fields {
-		field := StructField{Node: f, Name: f.Name}
-		tname := getTypeName(f.Type)
-		ft, err := a.CurrentScope.lookupType(tname)
-		if err != nil {
-			a.addError(f, err)
-			field.Type = InvalidT
-		} else if ft == VoidT {
+		field := Field{Node: f, Name: f.Name}
+		ft := a.resolveType(f.Type)
+		if ft == VoidT {
 			a.errorF(f, "`void` is not a valid field type")
 			continue
 		} else {
@@ -679,24 +727,31 @@ func (a *Analyzer) resolveEnumT(t *EnumT) {
 	if !ok {
 		a.errorF(t.Node, "`%s` is not an enum", t.Node.Name)
 	}
-	for _, m := range def.Members {
-		variant := EnumVariant{Name: m.Name}
-		for _, f := range m.Fields {
-			field := VariantField{Node: f, Name: f.Name}
-			tname := getTypeName(f.Type)
-			fieldT, err := a.CurrentScope.lookupType(tname)
-			if err != nil {
-				a.addError(f, err)
-				field.Type = InvalidT
-			} else if fieldT == VoidT {
-				a.errorF(f, "`void` is not a valid field type")
-				continue
-			} else {
-				field.Type = fieldT
-			}
-			variant.Fields = append(variant.Fields, field)
+
+	for idx, mem := range def.Members {
+		variantT := &VariantT{Node: mem, Name: mem.Name, Enum: t,
+			Tag: idx, State: Unresolved,
 		}
-		t.Variants = append(t.Variants, variant)
+		for _, f := range mem.Fields {
+			vfield := Field{Node: f, Name: f.Name}
+			ft := a.resolveType(f.Type)
+			if ft == VoidT {
+				a.errorF(f, "`void` is not a valid field type")
+				vfield.Type = InvalidT
+			} else {
+				vfield.Type = ft
+			}
+			variantT.Fields = append(variantT.Fields, vfield)
+		}
+		variantT.State = Resolved
+		if err := a.CurrentScope.delcareType(variantT.getName(), variantT); err != nil {
+			a.addError(mem, err)
+		}
+		variantv := &VariantV{Name: variantT.getName(), Type: variantT}
+		if err := a.CurrentScope.declareValue(variantv.Name, variantv); err != nil {
+			a.addError(mem, err)
+		}
+		t.Variants = append(t.Variants, variantT)
 	}
 }
 
@@ -766,6 +821,9 @@ func (a *Analyzer) resolveAssignStmt(
 		as.Target = t
 	case *Variable:
 		as.Target = t
+	case *CaseBinding:
+		a.errorF(stmt.Target, "cannot rebind case binding")
+		return
 	default:
 		a.errorF(stmt.Target, "invalid assign target: `%T`", target)
 		return
@@ -807,16 +865,7 @@ func (a *Analyzer) resolveIf(
 		ifV.Then = &Block{Type: VoidT}
 	}
 
-	switch t := expr.Else.(type) {
-	case nil:
-		return ifV
-	case *ast.BlockExpr:
-		ifV.Else = a.resolveBlock(fb, t)
-	case *ast.IfExpr:
-		ifV.Else = yieldBlock(t, a.resolveIf(t, fb, asValue))
-	default:
-		ifV.Else = yieldBlock(t, a.resolveExpr(t, fb))
-	}
+	ifV.Else = a.resolveBranch(fb, expr.Else, asValue, false)
 
 	if asValue {
 		ifV.Type = a.getIfType(ifV)
@@ -843,6 +892,124 @@ func (a *Analyzer) getIfType(i *If) Type {
 	return tt
 }
 
+func (a *Analyzer) resolveBranch(
+	fb *FunctionBody, expr ast.Expression, asValue bool,
+	noScope bool,
+) *Block {
+	switch t := expr.(type) {
+	case *ast.BlockExpr:
+		if noScope {
+			return a.resolveBlockIn(fb, t)
+		} else {
+			return a.resolveBlock(fb, t)
+		}
+	case *ast.IfExpr:
+		return yieldBlock(t, a.resolveIf(t, fb, asValue))
+	case *ast.SwitchExpr:
+		return yieldBlock(t, a.resolveSwitch(t, fb, asValue))
+	default:
+		return yieldBlock(t, a.resolveExpr(t, fb))
+	}
+}
+
+func (a *Analyzer) getSwitchType(sw *Switch) Type {
+	var want Type
+	for _, arm := range sw.Arms {
+		if terminates(arm.Body) {
+			continue
+		}
+		t := arm.Body.Type
+		if t == InvalidT {
+			return InvalidT
+		}
+		if want == nil {
+			want = t
+		} else if err := identical(t, want); err != nil {
+			a.addError(arm.Node, err)
+			return InvalidT
+		}
+	}
+
+	if want == nil {
+		return VoidT
+	}
+
+	return want
+}
+
+func (a *Analyzer) resolveSwitchArm(
+	sw *Switch, node *ast.SwitchArm, fb *FunctionBody,
+	asValue bool,
+) SwitchArm {
+	arm := SwitchArm{Node: node}
+	if id, ok := node.Case.(*ast.IdentifierExpr); ok && id.Value == "_" {
+		arm.IsDefault = true
+	} else {
+		arm.Condition = a.resolveExpr(node.Case, fb)
+	}
+
+	switch {
+	case arm.IsDefault && node.Binding != nil && sw.Subject == nil:
+		a.errorF(node.Binding, "invalid `as`; nothing to bind to")
+		arm.Binding = &CaseBinding{
+			Node: node.Binding,
+			Name: node.Binding.Value,
+			Type: InvalidT,
+			Case: InvalidV,
+		}
+	case arm.IsDefault && node.Binding != nil:
+		arm.Binding = &CaseBinding{
+			Node: node.Binding,
+			Name: node.Binding.Value,
+			Type: sw.Subject.GetType(),
+			Case: sw.Subject,
+		}
+	case node.Binding != nil:
+		arm.Binding = &CaseBinding{
+			Node: node.Binding,
+			Name: node.Binding.Value,
+			Type: arm.Condition.GetType(),
+			Case: arm.Condition,
+		}
+	}
+
+	a.enterScope("arm")
+	defer a.exitScope()
+
+	if arm.Binding != nil {
+		if err := a.CurrentScope.declareValue(arm.Binding.Name, arm.Binding); err != nil {
+			a.addError(node.Binding, err)
+		}
+	}
+
+	arm.Body = a.resolveBranch(fb, node.Value, asValue, false)
+
+	return arm
+}
+
+func (a *Analyzer) resolveSwitch(
+	expr *ast.SwitchExpr, fb *FunctionBody, asValue bool,
+) *Switch {
+	sw := &Switch{Node: expr, Type: VoidT}
+	if expr.Subject != nil {
+		sw.Subject = a.resolveExpr(expr.Subject, fb)
+	}
+
+	for idx, arm := range expr.Arms {
+		armv := a.resolveSwitchArm(sw, arm, fb, asValue)
+		if armv.IsDefault && idx < len(expr.Arms)-1 {
+			a.errorF(arm, "`_` default arm must be at end of switch")
+		}
+		sw.Arms = append(sw.Arms, armv)
+	}
+
+	if asValue {
+		sw.Type = a.getSwitchType(sw)
+	}
+
+	return sw
+}
+
 func (a *Analyzer) resolveExprStmt(
 	fb *FunctionBody, block *Block, stmt *ast.ExpressionStatement,
 ) {
@@ -851,10 +1018,36 @@ func (a *Analyzer) resolveExprStmt(
 		ifv := a.resolveIf(t, fb, false)
 		block.Statements = append(block.Statements,
 			&ExpressionStatement{Node: t, Value: ifv})
+	case *ast.SwitchExpr:
+		sv := a.resolveSwitch(t, fb, false)
+		block.Statements = append(block.Statements,
+			&ExpressionStatement{Node: t, Value: sv})
 	default:
 		v := a.resolveExpr(t, fb)
 		es := &ExpressionStatement{Node: stmt.Expression, Value: v}
 		block.Statements = append(block.Statements, es)
+	}
+}
+
+func exitsBlock(s Statement) bool {
+	if _, ok := s.(*YieldStmt); ok {
+		return true
+	}
+	return stmtTerminates(s)
+}
+
+func (a *Analyzer) resolveStmts(
+	fb *FunctionBody, blk *Block, stmts []ast.Statement,
+) {
+	for i, s := range stmts {
+		n := len(blk.Statements)
+		a.resolveFunctionBodyStmt(fb, blk, s)
+		if len(blk.Statements) > n && exitsBlock(blk.Statements[len(blk.Statements)-1]) {
+			if i+1 < len(stmts) {
+				a.errorF(stmts[i+1], "unreachable code")
+			}
+			return
+		}
 	}
 }
 
@@ -918,9 +1111,7 @@ func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
 	var isExprBody bool
 	switch t := stmt.Body.(type) {
 	case *ast.BlockExpr:
-		for _, s := range t.Statements {
-			a.resolveFunctionBodyStmt(fb, fb.Body, s)
-		}
+		a.resolveStmts(fb, fb.Body, t.Statements)
 	default:
 		a.resolveFunctionBodyExpr(fb, t)
 		isExprBody = true
@@ -942,6 +1133,18 @@ func valueTerminates(v Value) bool {
 	switch t := v.(type) {
 	case *If:
 		return t.Else != nil && terminates(t.Then) && terminates(t.Else)
+	case *Switch:
+		if len(t.Arms) < 1 {
+			return false
+		}
+		for _, a := range t.Arms {
+			if a.IsDefault {
+				return true
+			}
+			if !terminates(a.Body) {
+				return false
+			}
+		}
 	}
 	return false
 }
@@ -974,14 +1177,7 @@ func (a *Analyzer) resolveVarStmt(
 ) {
 	v := &Variable{Node: stmt, Name: stmt.Name.Literal}
 	if stmt.Type != nil {
-		tname := getTypeName(stmt.Type)
-		t, err := a.CurrentScope.lookupType(tname)
-		if err != nil {
-			a.addError(stmt.Type, err)
-			v.DeclaredType = InvalidT
-		} else {
-			v.DeclaredType = t
-		}
+		v.DeclaredType = a.resolveType(stmt.Type)
 	}
 	val := a.resolveExpr(stmt.Value, fb)
 	if val == InvalidV || !a.requireValue(stmt.Value, val) {
@@ -1065,6 +1261,14 @@ func (a *Analyzer) resolveConstant(stmt *ast.VarStmt) {
 		return
 	}
 	c := &Constant{Node: stmt, Name: stmt.Name.Literal}
+	var declaredType Type
+	if stmt.Type != nil {
+		declaredType = a.resolveType(stmt.Type)
+		if declaredType == VoidT {
+			a.errorF(stmt.Type, "`void` is not a valid type here")
+		}
+		declaredType = InvalidT
+	}
 	val := a.resolveExpr(stmt.Value, nil)
 	if val == InvalidV {
 		return
@@ -1077,6 +1281,14 @@ func (a *Analyzer) resolveConstant(stmt *ast.VarStmt) {
 	} else {
 		c.Value, c.Type = rv, rv.GetType()
 	}
+
+	if declaredType != nil && declaredType != InvalidT {
+		if err := identical(declaredType, c.Type); err != nil {
+			a.addError(stmt, err)
+			c.Type = InvalidT
+		}
+	}
+
 	if err := a.CurrentScope.declareValue(c.Name, c); err != nil {
 		a.addError(stmt, err)
 	}
@@ -1110,19 +1322,13 @@ func NewAnalyzer() *Analyzer {
 	return a
 }
 
-func getTypeName(typ ast.Type) string {
-	switch t := typ.(type) {
-	case nil:
-		return "void"
-	case *ast.NamedType:
-		return t.Name
-	}
-	return ""
-}
-
 func (a *Analyzer) resolveIdentifierExpr(
 	expr *ast.IdentifierExpr, fb *FunctionBody,
 ) Value {
+	if expr.Value == "_" {
+		a.errorF(expr, "`_` is not a value")
+		return InvalidV
+	}
 	val, err := a.CurrentScope.lookupValue(expr.Value)
 	if err != nil {
 		a.addError(expr, err)
@@ -1285,7 +1491,7 @@ func (a *Analyzer) resolveStructConstruction(
 		if err != nil {
 			if hasZeroValue(f.Type) {
 				sc.Args = append(sc.Args,
-					StructConstructionArg{Name: f.Name, Value: &ZeroV{Type: f.Type}})
+					NamedArg{Node: arg, Name: f.Name, Value: &ZeroV{Type: f.Type}})
 				continue
 			}
 			a.addError(expr, err)
@@ -1303,31 +1509,30 @@ func (a *Analyzer) resolveStructConstruction(
 			a.addError(arg, err)
 			return InvalidV
 		}
-		scArg := StructConstructionArg{Node: arg, Name: f.Name, Value: argV}
+		scArg := NamedArg{Node: arg, Name: f.Name, Value: argV}
 		sc.Args = append(sc.Args, scArg)
 	}
 	return sc
 }
 
 func (a *Analyzer) resolveVariantConstruction(
-	e *EnumT, tag int, variant *EnumVariant, expr *ast.CallExpr,
-	fb *FunctionBody,
+	vt *VariantT, expr *ast.CallExpr, fb *FunctionBody,
 ) Value {
-	var args []VariantArg
-	for _, f := range variant.Fields {
+	var args []NamedArg
+	for _, f := range vt.Fields {
 		_, arg, err := getArgByName(expr.Args, f.Name)
 		if err != nil {
 			a.addError(expr, err)
-			args = append(args, VariantArg{Name: f.Name, Value: InvalidV})
+			args = append(args, NamedArg{Name: f.Name, Value: InvalidV})
 			continue
 		}
 		argValue := a.resolveExpr(arg.Value, fb)
 		if !a.requireValue(arg, argValue) {
 			return InvalidV
 		}
-		args = append(args, VariantArg{Name: f.Name, Value: argValue})
+		args = append(args, NamedArg{Name: f.Name, Value: argValue})
 	}
-	return &EnumVariantV{Enum: e, Tag: tag, Args: args}
+	return &VariantConstruction{Type: vt, Args: args}
 }
 
 func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
@@ -1335,9 +1540,8 @@ func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
 	switch t := leftVal.(type) {
 	case *StructV:
 		return a.resolveStructConstruction(t.Type, expr, fb)
-	case *EnumConstructorV:
-		variant := &t.Enum.Variants[t.Tag]
-		return a.resolveVariantConstruction(t.Enum, t.Tag, variant, expr, fb)
+	case *VariantV:
+		return a.resolveVariantConstruction(t.Type, expr, fb)
 	}
 	switch t := leftVal.GetType().(type) {
 	case *FunctionT:
@@ -1479,17 +1683,32 @@ func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr, fb *FunctionBody) Value {
 func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Value {
 	container := a.resolveExpr(expr.Container, fb)
 	switch t := container.(type) {
+	case *CaseBinding:
+		switch c := t.Case.(type) {
+		case *VariantV:
+			variant := c.Type
+			idx, field, err := variant.GetField(expr.Member)
+			if err != nil {
+				a.addError(expr.Container, err)
+				return InvalidV
+			} else {
+				return &FieldAccess{Container: t, Index: idx, Type: field.Type}
+			}
+		default:
+			a.errorF(expr.Container, "`%s` value has no fields", t.GetType().getName())
+			return InvalidV
+		}
 	case *EnumV:
 		enumT := t.Type
-		idx, variant, err := enumT.GetVariant(expr.Member)
+		_, variant, err := enumT.GetVariant(expr.Member)
 		if err != nil {
 			a.addError(expr, err)
 			return InvalidV
 		}
-		if len(variant.Fields) > 0 {
-			return &EnumConstructorV{Tag: idx, Enum: enumT}
+		if val, err := a.CurrentScope.lookupValue(variant.getName()); err != nil {
+			a.addError(expr, err)
 		} else {
-			return &EnumVariantV{Tag: idx, Enum: enumT}
+			return val
 		}
 	}
 	containerT := container.GetType()
@@ -1504,22 +1723,32 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Val
 			a.addError(expr, err)
 			return InvalidV
 		}
-		return &FieldAccess{Node: expr, Container: container,
-			Index: idx, Type: field.Type}
+		return &FieldAccess{
+			Node: expr, Container: container,
+			Index: idx, Type: field.Type,
+		}
+	case *EnumT:
+		a.errorF(expr.Container, "`%s` has no fields", t.Name)
+		return InvalidV
 	default:
-		a.errorF(expr.Container, "container value not currently supported")
+		a.errorF(expr.Container, "container value %T not currently supported", t)
 		return InvalidV
 	}
 }
 
-func (a *Analyzer) resolveBlock(fb *FunctionBody, expr *ast.BlockExpr) *Block {
+func (a *Analyzer) resolveBlockIn(
+	fb *FunctionBody, expr *ast.BlockExpr,
+) *Block {
 	blk := &Block{Type: VoidT}
+	a.resolveStmts(fb, blk, expr.Statements)
+	return blk
+}
+
+func (a *Analyzer) resolveBlock(fb *FunctionBody, expr *ast.BlockExpr) *Block {
 	a.enterScope("block")
 	defer a.exitScope()
-	for _, s := range expr.Statements {
-		a.resolveFunctionBodyStmt(fb, blk, s)
-	}
-	return blk
+
+	return a.resolveBlockIn(fb, expr)
 }
 
 func yieldBlock(node ast.Expression, v Value) *Block {
@@ -1551,6 +1780,8 @@ func (a *Analyzer) resolveExpr(expr ast.Expression, fb *FunctionBody) Value {
 		return a.resolveMemberExpr(t, fb)
 	case *ast.IfExpr:
 		return a.resolveIf(t, fb, true)
+	case *ast.SwitchExpr:
+		return a.resolveSwitch(t, fb, true)
 	}
 	return InvalidV
 }

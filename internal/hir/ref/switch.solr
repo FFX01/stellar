@@ -1,0 +1,467 @@
+// switch reference for the HIR (spec §6.10).
+// Section 1 must produce no errors. Section 2 needs `for`. Section 3 has one error per
+// function, marked ERR on the line it should be reported at.
+
+type Dir enum {
+    North,
+    South,
+    East,
+    West
+}
+
+type Action enum {
+    Add(title: str),
+    Complete(id: int),
+    Quit
+}
+
+type Task struct {
+    name: str,
+    action: Action
+}
+
+var limit = 10;
+
+fn nextAction() -> Action: Action.Quit;
+fn add(title: str) {}
+fn complete(id: int) {}
+
+// ---------------------------------------------------------------------------
+// 1. Valid
+// ---------------------------------------------------------------------------
+
+// int subject, literal cases, `_` default, value position
+fn intSubject(n: int) -> str {
+    var s = switch n {
+        0 => "zero",
+        1 => "one",
+        _ => "many"
+    };
+    return s;
+}
+
+// str subject
+fn strSubject(cmd: str) -> int {
+    return switch cmd {
+        "add" => 1,
+        "list" => 2,
+        _ => 0
+    };
+}
+
+// bool subject: true and false are exhaustive without `_`
+fn boolSubject(b: bool) -> str {
+    return switch b {
+        true => "yes",
+        false => "no"
+    };
+}
+
+// package-level constant as a case
+fn constantCase(n: int) -> bool {
+    return switch n {
+        limit => true,
+        _ => false
+    };
+}
+
+// enum without payloads: every variant listed, no `_`
+fn fieldlessEnum(d: Dir) -> str {
+    return switch d {
+        Dir.North => "n",
+        Dir.South => "s",
+        Dir.East => "e",
+        Dir.West => "w"
+    };
+}
+
+// enum with payloads: `as` binds the variant, arms without `as` are fine
+fn payloadEnum(a: Action) -> str {
+    return switch a {
+        Action.Add as add => "add " + add.title,
+        Action.Complete as c => {
+            var id = c.id + 1;
+            >> "complete";
+        }
+        Action.Quit => "quit"
+    };
+}
+
+// enum with a `_` default instead of listing every variant
+fn enumDefault(a: Action) -> bool {
+    return switch a {
+        Action.Quit => true,
+        _ => false
+    };
+}
+
+// subject that is not a variable: `as` names its value
+fn callSubject() -> str {
+    return switch nextAction() {
+        Action.Add as a => a.title,
+        _ as other => "other"
+    };
+}
+
+// `as` on a literal case and on `_`: binding has the subject's type
+fn literalBinding(n: int) -> int {
+    return switch n {
+        0 as z => z + 1,
+        _ as v => v * 2
+    };
+}
+
+// field path as subject
+fn fieldSubject(t: Task) -> str {
+    return switch t.action {
+        Action.Add as a => a.title,
+        _ => t.name
+    };
+}
+
+// subject-less: bool cases, first true wins
+fn noSubject(n: int) -> str {
+    return switch {
+        n < 0 => "negative",
+        n == 0 => "zero",
+        n > limit => "big",
+        _ => "positive"
+    };
+}
+
+// statement position: void arms, `_ => {}` as a no-op default
+fn statementVoid(a: Action) {
+    switch a {
+        Action.Add as x => add(x.title),
+        Action.Complete as x => complete(x.id),
+        _ => {}
+    }
+}
+
+// statement position: arm types differ, values are discarded
+fn statementMixed(n: int) {
+    switch n {
+        1 => print("one"),
+        2 => 2,
+        3 => "three",
+        _ => {}
+    }
+}
+
+// statement position with yields that are discarded
+fn statementYield(n: int) {
+    switch n {
+        1 => { >> 1; }
+        _ => { >> "x"; }
+    }
+}
+
+// value position: a diverging arm takes the other arms' type
+fn divergingArm(a: Action) -> str {
+    var title = switch a {
+        Action.Add as x => x.title,
+        _ => { return "none"; }
+    };
+    return title;
+}
+
+// every arm returns: the switch terminates, no trailing return needed
+fn allArmsReturn(d: Dir) -> int {
+    switch d {
+        Dir.North => { return 1; }
+        Dir.South => { return 2; }
+        _ => { return 0; }
+    }
+}
+
+// expression-bodied function
+fn exprBody(d: Dir) -> bool: switch d {
+    Dir.North => true,
+    _ => false
+};
+
+// switch as an argument
+fn asArgument(b: bool) {
+    print(switch b {
+        true => "on",
+        false => "off"
+    });
+}
+
+// nested switch, yielded from a block arm
+fn nested(a: Action, n: int) -> str {
+    return switch a {
+        Action.Complete as c => {
+            >> switch {
+                c.id > n => "later",
+                _ => "now"
+            };
+        }
+        _ => switch n {
+            0 => "zero",
+            _ => "other"
+        }
+    };
+}
+
+// the same binding name in different arms: each arm has its own scope
+fn sameBindingName(a: Action) -> int {
+    return switch a {
+        Action.Add as x => 1,
+        Action.Complete as x => x.id,
+        Action.Quit => 0
+    };
+}
+
+// switch inside if branches and if inside arms
+fn mixedWithIf(n: int, b: bool) -> str {
+    return if b {
+        >> switch n {
+            0 => if n > 1 { >> "a"; } else "b",
+            _ => "c"
+        };
+    } else "d";
+}
+
+// trailing comma, no comma after a block arm
+fn punctuation(n: int) -> int {
+    return switch n {
+        0 => { >> 1; }
+        1 => 2,
+        _ => 3,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// 2. Valid, needs `for`
+// ---------------------------------------------------------------------------
+
+// `break` aimed at a loop outside the switch makes the arm diverge
+fn breakOutside(cmds: []str) -> int {
+    mut count = 0;
+    for _, cmd in cmds {
+        var n = switch cmd {
+            "quit" => { break; }
+            "skip" => { continue; }
+            _ => 1
+        };
+        count += n;
+    }
+    return count;
+}
+
+// `break` aimed at a loop inside the arm does not make the arm diverge
+fn breakInside(n: int, values: []int) {
+    switch {
+        n > 2 => {
+            for _, v in values {
+                if v > 10 {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Errors (one per function)
+// ---------------------------------------------------------------------------
+
+fn errFloatSubject(f: float) -> int {
+    return switch f {               // ERR: float subject
+        1.0 => 1,
+        _ => 0
+    };
+}
+
+fn errNonConstantCase(n: int, m: int) -> int {
+    return switch n {
+        m => 1,                     // ERR: case is not a constant
+        _ => 0
+    };
+}
+
+fn errCallCase(n: int) -> int {
+    return switch n {
+        strSubject("a") => 1,       // ERR: case is not a constant
+        _ => 0
+    };
+}
+
+fn errCaseType(n: int) -> int {
+    return switch n {
+        "one" => 1,                 // ERR: str case on an int subject
+        _ => 0
+    };
+}
+
+fn errUnqualifiedVariant(d: Dir) -> int {
+    return switch d {
+        North => 1,                 // ERR: unqualified variant (undefined `North`)
+        _ => 0
+    };
+}
+
+fn errWrongEnumCase(d: Dir) -> int {
+    return switch d {
+        Action.Quit => 1,           // ERR: `Action` case on a `Dir` subject
+        _ => 0
+    };
+}
+
+fn errDuplicateCase(n: int) -> int {
+    return switch n {
+        1 => 1,
+        1 => 2,                     // ERR: duplicate case
+        _ => 0
+    };
+}
+
+fn errDuplicateVariant(d: Dir) -> int {
+    return switch d {
+        Dir.North => 1,
+        Dir.North => 2,             // ERR: duplicate case
+        _ => 0
+    };
+}
+
+fn errDefaultNotLast(n: int) -> int {
+    return switch n {
+        _ => 0,                     // ERR: `_` must be last
+        1 => 1
+    };
+}
+
+fn errMissingVariant(d: Dir) -> int {
+    return switch d {               // ERR: not exhaustive (missing Dir.West)
+        Dir.North => 1,
+        Dir.South => 2,
+        Dir.East => 3
+    };
+}
+
+fn errMissingDefault(n: int) -> int {
+    return switch n {               // ERR: not exhaustive (needs `_`)
+        0 => 0,
+        1 => 1
+    };
+}
+
+fn errMissingDefaultStmt(n: int) {
+    switch n {                      // ERR: not exhaustive, also in statement position
+        0 => print("zero")
+    }
+}
+
+fn errMissingDefaultNoSubject(n: int) -> int {
+    return switch {                 // ERR: not exhaustive (needs `_`)
+        n > 0 => 1,
+        n < 0 => 2
+    };
+}
+
+fn errNonBoolCase(n: int) -> int {
+    return switch {
+        n + 1 => 1,                 // ERR: case must be bool without a subject
+        _ => 0
+    };
+}
+
+fn errAsWithoutSubject(n: int) -> int {
+    return switch {
+        n > 0 as b => 1,            // ERR: `as` needs a subject
+        _ => 0
+    };
+}
+
+fn errImplicitNarrowing(a: Action) -> str {
+    return switch a {
+        Action.Add => a.title,      // ERR: no field `title` on `Action` (no narrowing)
+        _ => ""
+    };
+}
+
+fn errWrongVariantField(a: Action) -> str {
+    return switch a {
+        Action.Quit as q => q.title, // ERR: `Action.Quit` has no field `title`
+        _ => ""
+    };
+}
+
+fn errOtherVariantField(a: Action) -> int {
+    return switch a {
+        Action.Add as x => x.id,    // ERR: `Action.Add` has no field `id`
+        _ => 0
+    };
+}
+
+fn errDefaultBindingField(a: Action) -> str {
+    return switch a {
+        _ as x => x.title           // ERR: `_` binding has type `Action`, no field `title`
+    };
+}
+
+fn errAssignBinding(n: int) -> int {
+    return switch n {
+        _ as v => {
+            v = 2;                  // ERR: binding is immutable
+            >> v;
+        }
+    };
+}
+
+fn errRedeclareBinding(a: Action) -> int {
+    return switch a {
+        Action.Complete as c => {
+            var c = 1;              // ERR: redeclares `c` (same scope as the binding)
+            >> c;
+        }
+        _ => 0
+    };
+}
+
+fn errBindingOutOfScope(a: Action) -> int {
+    var n = switch a {
+        Action.Complete as c => c.id,
+        _ => c.id                   // ERR: undefined `c`
+    };
+    return n;
+}
+
+fn errArmTypes(n: int) -> int {
+    return switch n {
+        0 => 1,
+        _ => "many"                 // ERR: arm types differ (int, str)
+    };
+}
+
+fn errVoidValue(n: int) {
+    var x = switch n {              // ERR: void value can't be stored
+        _ => {}
+    };
+}
+
+fn errVoidArmInValue(n: int) -> int {
+    return switch n {
+        0 => print("zero"),         // ERR: arm types differ (void, int)
+        _ => 1
+    };
+}
+
+fn errMissingReturn(d: Dir) -> int { // ERR: must return `int` on every path
+    switch d {
+        Dir.North => { return 1; }
+        _ => {}
+    }
+}
+
+fn errConstructorAsValue(a: Action) -> int {
+    return switch a {
+        Action.Add => {
+            var ctor = Action.Add;  // ERR: constructor is not a value
+            >> 1;
+        }
+        _ => 0
+    };
+}

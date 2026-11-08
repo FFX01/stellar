@@ -703,6 +703,24 @@ Line breaks have no meaning.
 An assignment target is a variable, a field, or an element. Assigning to the variable itself
 rebinds it. Assigning to a field or element changes contents and needs `mut` (§5.1).
 
+**Unreachable code is an error.** A statement that never falls through to the next one ends
+its block, and any statement after it in the same block is reported as unreachable:
+- `return`, `break`, and `continue`;
+- `>>`, which leaves its own block the way `return` leaves the function (§6.8);
+- an `if` or `switch` whose every branch leaves the function.
+
+A `>>` inside a nested branch only leaves that branch, so it doesn't end the outer block:
+```solr
+var n = {
+    if c { >> 1; } else { >> 2; }   // each `>>` leaves its branch block
+    >> 3;                             // reachable: the block's value is 3
+};
+fn f() -> int {
+    return 1;
+    print("x");                       // error: unreachable code
+}
+```
+
 ---
 
 ## 8. Errors and absence

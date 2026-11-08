@@ -1,0 +1,410 @@
+// slice reference for the HIR (spec §3.3, §5.1–§5.3, §6.7, §9.1, §10.2).
+// Section 1 must produce no errors. Sections 2 and 3 need `for` and `Result`/`try`.
+// Sections 4 and 5 have one error per function, marked ERR on the line it should be reported
+// at. Section 5 needs the mutability checks.
+
+type Bag struct {
+    name: str,
+    items: []int
+}
+
+type Grid struct {
+    rows: [][]int
+}
+
+type Action enum {
+    Add(title: str),
+    Quit
+}
+
+// package-level constants: containers of primitives are allowed (§4.6)
+var primes = [2, 3, 5, 7];
+var names: []str = ["a", "b"];
+var noInts: []int = [];
+var matrix = [[1, 2], [3, 4]];
+var computed = [1 + 2, 3 * 4];
+
+fn makeInts() -> []int: [1, 2, 3];
+fn takeInts(xs: []int) -> int: len(xs);
+
+// ---------------------------------------------------------------------------
+// 1. Valid
+// ---------------------------------------------------------------------------
+
+// literals: element type inferred
+fn literals() {
+    var ints = [1, 2, 3];
+    var floats = [1.0, 2.5];
+    var strs = ["a", "b"];
+    var bools = [true, false];
+    var one = [42];
+}
+
+// `[]` takes its type from context
+fn emptyLiterals() -> []int {
+    var a: []int = [];
+    var b = takeInts([]);
+    var bag = Bag(name="empty", items=[]);
+    mut c: []str = ["x"];
+    c = [];
+    return [];
+}
+
+// a declared type on a non-empty literal
+fn declaredType() {
+    var xs: []int = [1, 2];
+    var grid: [][]int = [[1], [2, 3], []];
+}
+
+// nested slices
+fn nested() -> int {
+    var grid = [[1, 2], [3, 4]];
+    var row = grid[1];
+    return grid[0][1] + row[0];
+}
+
+// slices of structs and enums
+fn compound() -> str {
+    var bags = [Bag(name="a", items=[1]), Bag(name="b", items=[])];
+    var actions = [Action.Add(title="x"), Action.Quit];
+    var first = bags[0];
+    return bags[1].name + first.name;
+}
+
+// elements are any expression of the element type
+fn elementExprs(n: int) -> []int {
+    return [n, n + 1, takeInts([n]), if n > 0 { >> 1; } else 0, primes[0]];
+}
+
+// spread
+fn spread(xs: []int, ys: []int) -> []int {
+    var a = [...xs];
+    var b = [0, ...xs, 9];
+    var c = [...xs, ...ys];
+    var d: []int = [...makeInts()];
+    return [...a, ...b, ...c, ...d];
+}
+
+// indexing
+fn indexing(xs: []int, i: int, bag: Bag) -> int {
+    var a = xs[0];
+    var b = xs[i];
+    var c = xs[len(xs) - 1];
+    var d = bag.items[i + 1];
+    var e = makeInts()[2];
+    var f = [10, 20, 30][1];
+    return a + b + c + d + e + f;
+}
+
+// slicing
+fn slicing(xs: []int, i: int) -> []int {
+    var a = xs[1:3];
+    var b = xs[:i];
+    var c = xs[i:];
+    var d = xs[i:len(xs)];
+    var e = a[0:1][0];
+    return xs[1:];
+}
+
+// str: indexing and slicing give a str
+fn strings(s: str) -> str {
+    var first = s[0];
+    var rest = s[1:];
+    var mid = s[1:3];
+    var n = len(s);
+    return first + rest + mid;
+}
+
+// len
+fn lengths(xs: []int, grid: [][]int, s: str) -> int {
+    return len(xs) + len(grid) + len(grid[0]) + len(s) + len([1, 2]);
+}
+
+// slices as parameters, return values and fields
+fn passing(bag: Bag) -> []int {
+    var n = takeInts(bag.items);
+    var made = makeInts();
+    var moved = Bag(name=bag.name, items=made);
+    return moved.items;
+}
+
+// methods that return a new value work on any binding, including params (§10.2)
+fn newValues(xs: []int) -> bool {
+    var a = xs.append(4);
+    var b = xs.prepend(0);
+    var c = a.append(5).prepend(-1);
+    return xs.contains(3);
+}
+
+// rebinding a `var` to a new slice is allowed
+fn rebinding() -> []int {
+    var xs = [1];
+    xs = xs.append(2);
+    xs = [];
+    return xs;
+}
+
+// in-place changes on a `mut`
+fn inPlace() -> []int {
+    mut xs = [3, 1, 2];
+    xs[0] = 5;
+    xs[1] += 1;
+    xs.push(4);
+    xs.sort();
+    return xs;
+}
+
+// in-place changes through nested elements and fields
+fn nestedInPlace() -> Grid {
+    mut grid = Grid(rows=[[1, 2], [3]]);
+    grid.rows[0][1] = 7;
+    grid.rows[1].push(4);
+    grid.rows.push([]);
+
+    mut bags = [Bag(name="a", items=[])];
+    bags[0].name = "b";
+    bags[0].items.push(1);
+    return grid;
+}
+
+// `@` makes a mutable copy of a param, an element or a slice
+fn copies(xs: []int, grid: [][]int) -> []int {
+    mut a = @xs;
+    mut b = @xs[1:3];
+    mut c = @grid[0];
+    a.push(1);
+    b[0] = 2;
+    c.push(3);
+    return a;
+}
+
+// a slice expression can initialize a `var`
+fn sliceToVar(xs: []int) -> []int {
+    var part = xs[1:3];
+    return part;
+}
+
+// slices as switch arm values and in package constants
+fn constants(n: int) -> []int {
+    var first = primes[0] + matrix[1][0];
+    return switch n {
+        0 => noInts,
+        1 => primes,
+        _ => [n]
+    };
+}
+
+// `len` as a switch subject
+fn lenSwitch(xs: []int) -> str {
+    return switch len(xs) {
+        0 => "empty",
+        1 => "one",
+        _ => "many"
+    };
+}
+
+// ---------------------------------------------------------------------------
+// 2. Valid, needs `for`
+// ---------------------------------------------------------------------------
+
+fn sum(xs: []int) -> int {
+    mut total = 0;
+    for _, x in xs {
+        total += x;
+    }
+    return total;
+}
+
+fn indexes(xs: []str) -> []int {
+    mut out: []int = [];
+    for i, _ in xs {
+        out.push(i);
+    }
+    return out;
+}
+
+fn nestedLoops(grid: [][]int) -> int {
+    mut total = 0;
+    for _, row in grid {
+        for _, x in row {
+            total += x;
+        }
+    }
+    return total;
+}
+
+// ---------------------------------------------------------------------------
+// 3. Valid, needs `Result` and `try`
+// ---------------------------------------------------------------------------
+
+fn safeGet(xs: []int, i: int) -> int! {
+    var x = try xs.get(i);
+    return Ok(x);
+}
+
+fn getOrZero(xs: []int, i: int) -> int {
+    return try xs.get(i) else 0;
+}
+
+// ---------------------------------------------------------------------------
+// 4. Errors (one per function)
+// ---------------------------------------------------------------------------
+
+fn errMixedElements() {
+    var xs = [1, "a"];                  // ERR: element types differ (int, str)
+}
+
+fn errMixedNumbers() {
+    var xs = [1, 2.0];                  // ERR: element types differ (int, float), no conversion
+}
+
+fn errEmptyNoType() {
+    var xs = [];                        // ERR: `[]` needs an expected type
+}
+
+fn errDeclaredMismatch() {
+    var xs: []str = [1, 2];             // ERR: []int != []str
+}
+
+fn errNestedMismatch() {
+    var grid: [][]int = [[1], ["a"]];   // ERR: str element in a []int
+}
+
+fn errElementVoid() {
+    var xs = [print("x")];              // ERR: void value can't be stored
+}
+
+fn errElementConstructor() {
+    var xs = [Action.Add];              // ERR: constructor is not a value
+}
+
+fn errSpreadNonSlice(n: int) -> []int {
+    return [...n];                      // ERR: spread needs a slice
+}
+
+fn errSpreadElementType(strs: []str) -> []int {
+    return [...strs, 1];                // ERR: []str spread into a []int literal
+}
+
+fn errIndexType(xs: []int) -> int {
+    return xs["a"];                     // ERR: index must be int
+}
+
+fn errIndexFloat(xs: []int) -> int {
+    return xs[1.0];                     // ERR: index must be int
+}
+
+fn errIndexNonSlice(n: int) -> int {
+    return n[0];                        // ERR: `int` can't be indexed
+}
+
+fn errSliceBoundType(xs: []int) -> []int {
+    return xs["a":2];                   // ERR: slice bound must be int
+}
+
+fn errStrIndexType(s: str) -> int {
+    var c: int = s[0];                  // ERR: str != int (indexing a str gives a str)
+    return c;
+}
+
+fn errElementType(xs: []int) -> str {
+    return xs[0];                       // ERR: int != str
+}
+
+fn errSliceType(xs: []int) -> int {
+    return xs[1:];                      // ERR: []int != int
+}
+
+fn errAddSlices(xs: []int, ys: []int) -> []int {
+    return xs + ys;                     // ERR: `+` not defined on []int (use spread)
+}
+
+fn errLenArg(n: int) -> int {
+    return len(n);                      // ERR: len needs a slice or str
+}
+
+fn errAppendType(xs: []int) -> []int {
+    return xs.append("a");              // ERR: str != int
+}
+
+fn errUnknownMethod(xs: []int) -> []int {
+    return xs.reverse();                // ERR: []int has no method `reverse`
+}
+
+fn errFieldOnSlice(xs: []int) -> int {
+    return xs.length;                   // ERR: []int has no field `length`
+}
+
+fn errPushType() {
+    mut xs = [1];
+    xs.push("a");                       // ERR: str != int
+}
+
+fn errAssignElementType() {
+    mut xs = [1];
+    xs[0] = "a";                        // ERR: str != int
+}
+
+fn errAssignSliceExpr() {
+    mut xs = [1, 2, 3];
+    xs[0:2] = [4, 5];                   // ERR: a slice expression isn't an assignment target
+}
+
+fn errSliceSubject(xs: []int) -> int {
+    return switch xs {                  // ERR: cannot switch on `[]int`
+        _ => 0
+    };
+}
+
+var errConstStructs = [Bag(name="a", items=[])]; // ERR: not a constant (struct construction)
+
+// ---------------------------------------------------------------------------
+// 5. Errors, needs the mutability checks (one per function)
+// ---------------------------------------------------------------------------
+
+fn errAssignElementOnVar() {
+    var xs = [1];
+    xs[0] = 2;                          // ERR: `xs` is not mutable
+}
+
+fn errPushOnVar() {
+    var xs = [1];
+    xs.push(2);                         // ERR: push needs a `mut` receiver
+}
+
+fn errAssignElementOnParam(xs: []int) {
+    xs[0] = 2;                          // ERR: parameters are immutable
+}
+
+fn errPushOnParam(xs: []int) {
+    xs.push(1);                         // ERR: parameters are immutable
+}
+
+fn errSortOnParam(xs: []int) {
+    xs.sort();                          // ERR: parameters are immutable
+}
+
+fn errNestedOnParam(grid: [][]int) {
+    grid[0][0] = 1;                     // ERR: parameters are immutable
+}
+
+fn errMutFromVar(xs: []int) {
+    mut ys = xs;                        // ERR: use `@` to make a mutable copy
+}
+
+fn errMutFromSlice(xs: []int) {
+    mut part = xs[1:3];                 // ERR: a slice isn't a fresh value; use `@`
+}
+
+fn errMutFromElement(grid: [][]int) {
+    mut row = grid[0];                  // ERR: an element isn't a fresh value; use `@`
+}
+
+fn errAssignStr() {
+    mut s = "abc";
+    s[0] = "x";                         // ERR: str is immutable text
+}
+
+fn errAssignConst() {
+    primes[0] = 1;                      // ERR: constants can't be changed
+}
