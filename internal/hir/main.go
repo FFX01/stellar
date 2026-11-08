@@ -1,8 +1,11 @@
 package hir
 
 import (
+	"cmp"
 	"fmt"
+	"math"
 	"regexp"
+	"slices"
 	"stellar/internal/ast"
 	"stellar/internal/errors"
 
@@ -83,20 +86,24 @@ const (
 	OpLTE
 	OpGt
 	OpGte
+	OpAnd
+	OpOr
 )
 
 var OpMap = map[string]Operator{
-	"+":  OpAdd,
-	"-":  OpSub,
-	"*":  OpMul,
-	"/":  OpDiv,
-	"%":  OpMod,
-	"==": OpEq,
-	"!=": OpNeq,
-	"<":  OpLt,
-	"<=": OpLTE,
-	">":  OpGt,
-	">=": OpGte,
+	"+":   OpAdd,
+	"-":   OpSub,
+	"*":   OpMul,
+	"/":   OpDiv,
+	"%":   OpMod,
+	"==":  OpEq,
+	"!=":  OpNeq,
+	"<":   OpLt,
+	"<=":  OpLTE,
+	">":   OpGt,
+	">=":  OpGte,
+	"and": OpAnd,
+	"or":  OpOr,
 }
 
 type Type interface {
@@ -312,6 +319,16 @@ type FunctionCall struct {
 func (fc *FunctionCall) val()          {}
 func (fc *FunctionCall) GetType() Type { return fc.Type }
 
+type Constant struct {
+	Node  *ast.VarStmt
+	Name  string
+	Type  Type
+	Value Value
+}
+
+func (c *Constant) val()          {}
+func (c *Constant) GetType() Type { return c.Type }
+
 type Variable struct {
 	Node         *ast.VarStmt
 	Name         string
@@ -392,6 +409,22 @@ type Statement interface {
 	stmt()
 }
 
+type Block struct {
+	Statements []Statement
+	Type       Type
+}
+
+type If struct {
+	Node      *ast.IfExpr
+	Condition Value
+	Then      *Block
+	Else      *Block
+	Type      Type
+}
+
+func (i *If) val()          {}
+func (i *If) GetType() Type { return i.Type }
+
 type VariableStmt struct {
 	Node  *ast.VarStmt
 	Value *Variable
@@ -436,18 +469,26 @@ func (es *ExpressionStatement) stmt()             {}
 func (es *ExpressionStatement) GetNode() ast.Node { return es.Node }
 
 type ReturnStatement struct {
-	Node  *ast.ReturnStmt
+	Node  ast.Node
 	Value Value
 }
 
 func (rs *ReturnStatement) stmt()             {}
 func (rs *ReturnStatement) GetNode() ast.Node { return rs.Node }
 
+type YieldStmt struct {
+	Node  ast.Node
+	Value Value
+}
+
+func (ys *YieldStmt) stmt()             {}
+func (ys *YieldStmt) GetNode() ast.Node { return ys.Node }
+
 type FunctionBody struct {
 	Node      ast.Node
 	Type      *FunctionT
 	ParamVars []*FunctionParamVar
-	Body      []Statement
+	Body      *Block
 }
 
 func (fb *FunctionBody) val() {}
@@ -582,6 +623,10 @@ func (a *Analyzer) resolveFunctionParam(t *FunctionT, p *ast.Parameter) {
 		a.addError(p, err)
 		return
 	}
+	if typ == VoidT {
+		a.errorF(p, "`void` is not a valid parameter type")
+		return
+	}
 	fp.Type = typ
 	t.Params = append(t.Params, fp)
 }
@@ -618,6 +663,9 @@ func (a *Analyzer) resolveStructT(t *StructT) {
 		if err != nil {
 			a.addError(f, err)
 			field.Type = InvalidT
+		} else if ft == VoidT {
+			a.errorF(f, "`void` is not a valid field type")
+			continue
 		} else {
 			field.Type = ft
 		}
@@ -640,6 +688,9 @@ func (a *Analyzer) resolveEnumT(t *EnumT) {
 			if err != nil {
 				a.addError(f, err)
 				field.Type = InvalidT
+			} else if fieldT == VoidT {
+				a.errorF(f, "`void` is not a valid field type")
+				continue
 			} else {
 				field.Type = fieldT
 			}
@@ -662,29 +713,47 @@ func (a *Analyzer) pass2() {
 	}
 }
 
-func (a *Analyzer) resolveReturnStmt(fb *FunctionBody, stmt *ast.ReturnStmt) {
-	s := &ReturnStatement{Node: stmt}
-	if stmt.Value != nil {
-		s.Value = a.resolveExpr(stmt.Value)
+func (a *Analyzer) requireValue(node ast.Node, v Value) bool {
+	if v.GetType() == VoidT {
+		a.errorF(node, "expression has no value (type `void`) and cannot be used here")
+		return false
 	}
-
-	switch {
-	case fb.Type.ReturnType == VoidT && s.Value != nil:
-		a.errorF(stmt, "function `%s` returns no value", fb.Type.Name)
-	case fb.Type.ReturnType != VoidT && s.Value == nil:
-		a.errorF(stmt,
-			"function `%s` must return `%s`", fb.Type.Name, fb.Type.ReturnType.getName())
-	case s.Value != nil:
-		if err := identical(s.Value.GetType(), fb.Type.ReturnType); err != nil {
-			a.addError(stmt, err)
-		}
-	}
-	fb.Body = append(fb.Body, s)
+	return true
 }
 
-func (a *Analyzer) resolveAssignStmt(stmt *ast.AssignStmt, fb *FunctionBody) {
+func (a *Analyzer) checkReturn(
+	fb *FunctionBody, node ast.Node, v Value,
+) *ReturnStatement {
+	switch {
+	case fb.Type.ReturnType != VoidT && v == nil:
+		a.errorF(node,
+			"function `%s` must return `%s`", fb.Type.Name, fb.Type.ReturnType.getName())
+	case v != nil:
+		if err := identical(v.GetType(), fb.Type.ReturnType); err != nil {
+			a.addError(node, err)
+		}
+	}
+	return &ReturnStatement{Node: node, Value: v}
+}
+
+func (a *Analyzer) resolveReturnStmt(
+	fb *FunctionBody, block *Block, stmt *ast.ReturnStmt,
+) {
+	var v Value
+	if stmt.Value != nil {
+		v = a.resolveExpr(stmt.Value, fb)
+	} else {
+		v = nil
+	}
+	rs := a.checkReturn(fb, stmt, v)
+	block.Statements = append(block.Statements, rs)
+}
+
+func (a *Analyzer) resolveAssignStmt(
+	fb *FunctionBody, block *Block, stmt *ast.AssignStmt,
+) {
 	as := &AssignStmt{Node: stmt}
-	target := a.resolveExpr(stmt.Target)
+	target := a.resolveExpr(stmt.Target, fb)
 	switch t := target.(type) {
 	case *FieldAccess:
 		root := t.GetRoot()
@@ -701,7 +770,14 @@ func (a *Analyzer) resolveAssignStmt(stmt *ast.AssignStmt, fb *FunctionBody) {
 		a.errorF(stmt.Target, "invalid assign target: `%T`", target)
 		return
 	}
-	as.Value = a.resolveExpr(stmt.Value)
+
+	val := a.resolveExpr(stmt.Value, fb)
+	if !a.requireValue(stmt.Value, val) {
+		as.Value = InvalidV
+	} else {
+		as.Value = a.resolveExpr(stmt.Value, fb)
+	}
+
 	if as.Value.GetType() == InvalidT || as.Target.GetType() == InvalidT {
 		return
 	}
@@ -709,24 +785,114 @@ func (a *Analyzer) resolveAssignStmt(stmt *ast.AssignStmt, fb *FunctionBody) {
 		a.addError(stmt.Value, err)
 		return
 	}
-	fb.Body = append(fb.Body, as)
+	fb.Body.Statements = append(fb.Body.Statements, as)
 }
 
-func (a *Analyzer) resolveFunctionBodyStmt(fb *FunctionBody, stmt ast.Statement) {
+func (a *Analyzer) resolveIf(
+	expr *ast.IfExpr, fb *FunctionBody,
+) *If {
+	ifV := &If{Node: expr, Type: VoidT}
+
+	ifV.Condition = a.resolveExpr(expr.Condition, fb)
+	if t := ifV.Condition.GetType(); t != InvalidT {
+		if err := identical(t, BoolT); err != nil {
+			a.addError(expr.Condition, err)
+		}
+	}
+
+	if then, ok := expr.Then.(*ast.BlockExpr); ok {
+		ifV.Then = a.resolveBlock(fb, then)
+	} else {
+		a.errorF(expr.Then, "then branch of if expression must be a block")
+		ifV.Then = &Block{Type: VoidT}
+	}
+
+	switch t := expr.Else.(type) {
+	case nil:
+		return ifV
+	case *ast.BlockExpr:
+		ifV.Else = a.resolveBlock(fb, t)
+	case *ast.IfExpr:
+		ifV.Else = yieldBlock(t, a.resolveIf(t, fb))
+	default:
+		ifV.Else = yieldBlock(t, a.resolveExpr(t, fb))
+	}
+
+	ifV.Type = a.getIfType(ifV)
+
+	return ifV
+}
+
+func (a *Analyzer) getIfType(i *If) Type {
+	tt, et := i.Then.Type, i.Else.Type
+	switch {
+	case tt == InvalidT || et == InvalidT:
+		return InvalidT
+	case terminates(i.Then):
+		return et
+	case terminates(i.Else):
+		return tt
+	}
+	if err := identical(tt, et); err != nil {
+		a.errorF(i.Node,
+			"if branches have differing types `%s` != `%s`",
+			tt.getName(), et.getName())
+	}
+	return tt
+}
+
+func (a *Analyzer) resolveExprStmt(
+	fb *FunctionBody, block *Block, stmt *ast.ExpressionStatement,
+) {
+	switch t := stmt.Expression.(type) {
+	case *ast.IfExpr:
+		ifv := a.resolveIf(t, fb)
+		block.Statements = append(block.Statements,
+			&ExpressionStatement{Node: t, Value: ifv})
+	default:
+		v := a.resolveExpr(t, fb)
+		es := &ExpressionStatement{Node: stmt.Expression, Value: v}
+		block.Statements = append(block.Statements, es)
+	}
+}
+
+func (a *Analyzer) resolveYieldStmt(
+	fb *FunctionBody, block *Block, stmt *ast.EmitStmt,
+) {
+	v := a.resolveExpr(stmt.Value, fb)
+	block.Statements = append(block.Statements, &YieldStmt{Node: stmt.Value, Value: v})
+	block.Type = v.GetType()
+}
+
+func (a *Analyzer) resolveFunctionBodyStmt(
+	fb *FunctionBody, block *Block, stmt ast.Statement,
+) {
 	switch t := stmt.(type) {
 	case *ast.ReturnStmt:
-		a.resolveReturnStmt(fb, t)
+		a.resolveReturnStmt(fb, block, t)
 	case *ast.VarStmt:
-		a.resolveVarStmt(t, fb)
+		a.resolveVarStmt(fb, block, t)
 	case *ast.AssignStmt:
-		a.resolveAssignStmt(t, fb)
+		a.resolveAssignStmt(fb, block, t)
+	case *ast.ExpressionStatement:
+		a.resolveExprStmt(fb, block, t)
+	case *ast.EmitStmt:
+		if block == fb.Body {
+			a.errorF(t,
+				"`>>` cannot be used in the top-level function scope; use `return` instead",
+			)
+		} else {
+			a.resolveYieldStmt(fb, block, t)
+		}
+	default:
+		a.errorF(stmt, "unknown statement `%T`", stmt)
 	}
 }
 
 func (a *Analyzer) resolveFunctionBodyExpr(fb *FunctionBody, expr ast.Expression) {
-	v := a.resolveExpr(expr)
-	es := &ExpressionStatement{Node: expr, Value: v}
-	fb.Body = append(fb.Body, es)
+	v := a.resolveExpr(expr, fb)
+	rs := a.checkReturn(fb, expr, v)
+	fb.Body.Statements = append(fb.Body.Statements, rs)
 }
 
 func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
@@ -737,7 +903,7 @@ func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
 	if !ok {
 		a.errorF(stmt, "function expressions not yet supported")
 	}
-	fb := &FunctionBody{Node: stmt.Body, Type: t}
+	fb := &FunctionBody{Node: stmt.Body, Type: t, Body: &Block{Type: VoidT}}
 
 	for idx, p := range t.Params {
 		pv := &FunctionParamVar{Node: p.Node, Name: p.Name, Index: idx, Type: p.Type}
@@ -747,16 +913,49 @@ func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
 		}
 	}
 
+	var isExprBody bool
 	switch t := stmt.Body.(type) {
 	case *ast.BlockExpr:
 		for _, s := range t.Statements {
-			a.resolveFunctionBodyStmt(fb, s)
+			a.resolveFunctionBodyStmt(fb, fb.Body, s)
 		}
 	default:
 		a.resolveFunctionBodyExpr(fb, t)
+		isExprBody = true
 	}
 
 	a.storeFunctionBody("", fb)
+
+	if !isExprBody && t.ReturnType != VoidT && !terminates(fb.Body) {
+		a.errorF(stmt, "function `%s` must return `%s` on every path", t.Name,
+			t.ReturnType.getName())
+	}
+}
+
+func terminates(b *Block) bool {
+	return slices.ContainsFunc(b.Statements, stmtTerminates)
+}
+
+func valueTerminates(v Value) bool {
+	switch t := v.(type) {
+	case *If:
+		return t.Else != nil && terminates(t.Then) && terminates(t.Else)
+	}
+	return false
+}
+
+func stmtTerminates(stmt Statement) bool {
+	switch t := stmt.(type) {
+	case *ReturnStatement:
+		return true
+	case *ExpressionStatement:
+		return valueTerminates(t.Value)
+	case *YieldStmt:
+		return valueTerminates(t.Value)
+	case *VariableStmt:
+		return valueTerminates(t.Value.Value)
+	}
+	return false
 }
 
 func (a *Analyzer) pass4() {
@@ -768,7 +967,9 @@ func (a *Analyzer) pass4() {
 	}
 }
 
-func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt, fb *FunctionBody) {
+func (a *Analyzer) resolveVarStmt(
+	fb *FunctionBody, block *Block, stmt *ast.VarStmt,
+) {
 	v := &Variable{Node: stmt, Name: stmt.Name.Literal}
 	if stmt.Type != nil {
 		tname := getTypeName(stmt.Type)
@@ -780,9 +981,8 @@ func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt, fb *FunctionBody) {
 			v.DeclaredType = t
 		}
 	}
-	val := a.resolveExpr(stmt.Value)
-	if val == InvalidV {
-		a.errorF(stmt.Value, "invalid expression")
+	val := a.resolveExpr(stmt.Value, fb)
+	if val == InvalidV || !a.requireValue(stmt.Value, val) {
 		v.Value = InvalidV
 		v.InferredType = InvalidT
 	} else {
@@ -805,10 +1005,78 @@ func (a *Analyzer) resolveVarStmt(stmt *ast.VarStmt, fb *FunctionBody) {
 	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
 		a.addError(stmt, err)
 	}
-	if fb != nil {
+	if fb != nil && block != nil {
 		v.Owner = fb
 		vs := &VariableStmt{Node: stmt, Value: v}
-		fb.Body = append(fb.Body, vs)
+		block.Statements = append(block.Statements, vs)
+	}
+}
+
+func (a *Analyzer) checkConstExpr(expr ast.Expression) bool {
+	switch t := expr.(type) {
+	case *ast.IntegerLiteralExpr, *ast.FloatLiteralExpr,
+		*ast.StringLiteralExpr, *ast.BoolLiteralExpr, *ast.IdentifierExpr:
+		return true
+	case *ast.NegativeExpr:
+		return a.checkConstExpr(t.Value)
+	case *ast.NotExpr:
+		return a.checkConstExpr(t.Value)
+	case *ast.InfixExpr:
+		return a.checkConstExpr(t.Left) && a.checkConstExpr(t.Right)
+	case *ast.SequenceLiteral:
+		for _, el := range t.Elements {
+			if !a.checkConstExpr(el) {
+				return false
+			}
+		}
+		return true
+	default:
+		a.errorF(expr, "only primitives, containers of primtives and operators are allowed in package-level contants")
+		return false
+	}
+}
+
+func foldConst(v Value) (Value, error) {
+	switch t := v.(type) {
+	case *IntLiteral, *StrLiteral, *FloatLiteral, *BoolLiteral:
+		return t, nil
+	case *Constant:
+		return t.Value, nil
+	case *BinaryValue:
+		l, err := foldConst(t.Left)
+		if err != nil {
+			return nil, err
+		}
+		r, err := foldConst(t.Right)
+		if err != nil {
+			return nil, err
+		}
+		return foldBinaryValue(t.Op, l, r)
+	default:
+		return nil, fmt.Errorf("unsupported const value")
+	}
+}
+
+func (a *Analyzer) resolveConstant(stmt *ast.VarStmt) {
+	if !a.checkConstExpr(stmt.Value) {
+		a.errorF(stmt.Value, "compile time constants must be primitives, containers of primitices, or basic arithmatic on primitives")
+		return
+	}
+	c := &Constant{Node: stmt, Name: stmt.Name.Literal}
+	val := a.resolveExpr(stmt.Value, nil)
+	if val == InvalidV {
+		return
+	}
+	rv, err := foldConst(val)
+	if err != nil {
+		a.addError(stmt, err)
+		c.Value = InvalidV
+		c.Type = InvalidT
+	} else {
+		c.Value, c.Type = rv, rv.GetType()
+	}
+	if err := a.CurrentScope.declareValue(c.Name, c); err != nil {
+		a.addError(stmt, err)
 	}
 }
 
@@ -816,7 +1084,7 @@ func (a *Analyzer) pass3(prog *ast.Program) {
 	for _, stmt := range prog.Statements {
 		switch t := stmt.(type) {
 		case *ast.VarStmt:
-			a.resolveVarStmt(t, nil)
+			a.resolveConstant(t)
 		}
 	}
 }
@@ -850,7 +1118,9 @@ func getTypeName(typ ast.Type) string {
 	return ""
 }
 
-func (a *Analyzer) resolveIdentifierExpr(expr *ast.IdentifierExpr) Value {
+func (a *Analyzer) resolveIdentifierExpr(
+	expr *ast.IdentifierExpr, fb *FunctionBody,
+) Value {
 	val, err := a.CurrentScope.lookupValue(expr.Value)
 	if err != nil {
 		a.addError(expr, err)
@@ -899,16 +1169,16 @@ func getBinaryType(op Operator, operand Type) (Type, error) {
 		default:
 			return InvalidT, defaultErr("%", operand.getName())
 		}
-	case OpEq, OpNeq, OpGt, OpGte, OpLt, OpLTE:
+	case OpEq, OpNeq, OpGt, OpGte, OpLt, OpLTE, OpAnd, OpOr:
 		return BoolT, nil
 	}
 	return InvalidT, fmt.Errorf("invalid operator")
 }
 
-func (a *Analyzer) resolveInfixExpr(expr *ast.InfixExpr) Value {
+func (a *Analyzer) resolveInfixExpr(expr *ast.InfixExpr, fb *FunctionBody) Value {
 	bv := &BinaryValue{Node: expr}
-	bv.Left = a.resolveExpr(expr.Left)
-	bv.Right = a.resolveExpr(expr.Right)
+	bv.Left = a.resolveExpr(expr.Left, fb)
+	bv.Right = a.resolveExpr(expr.Right, fb)
 	op, ok := OpMap[expr.Operator]
 	if !ok {
 		a.errorF(expr, "invalid operator `%s`", expr.Operator)
@@ -952,7 +1222,9 @@ func getArgByName(args []*ast.Argument, name string) (int, *ast.Argument, error)
 	return 0, nil, fmt.Errorf("argument with name `%s` not found", name)
 }
 
-func (a *Analyzer) resolveFunctionCall(ft *FunctionT, expr *ast.CallExpr) Value {
+func (a *Analyzer) resolveFunctionCall(
+	ft *FunctionT, expr *ast.CallExpr, fb *FunctionBody,
+) Value {
 	fc := &FunctionCall{Node: expr, Callee: ft, Type: ft.ReturnType}
 	for idx, p := range ft.Params {
 		var arg *ast.Argument
@@ -971,7 +1243,10 @@ func (a *Analyzer) resolveFunctionCall(ft *FunctionT, expr *ast.CallExpr) Value 
 				return fc
 			}
 		}
-		argV := a.resolveExpr(arg.Value)
+		argV := a.resolveExpr(arg.Value, fb)
+		if !a.requireValue(arg, argV) {
+			return fc
+		}
 		if argV == InvalidV {
 			a.errorF(arg, "unknown expression: `%T`", arg.Value)
 			return fc
@@ -995,7 +1270,9 @@ func hasZeroValue(t Type) bool {
 	return false
 }
 
-func (a *Analyzer) resolveStructConstruction(st *StructT, expr *ast.CallExpr) Value {
+func (a *Analyzer) resolveStructConstruction(
+	st *StructT, expr *ast.CallExpr, fb *FunctionBody,
+) Value {
 	sc := &StructConstruction{Node: expr, Callee: st}
 	if len(expr.Args) > len(st.Fields) {
 		a.errorF(expr, "too many arguments to constructor for struct `%s`", st.Name)
@@ -1012,7 +1289,10 @@ func (a *Analyzer) resolveStructConstruction(st *StructT, expr *ast.CallExpr) Va
 			a.addError(expr, err)
 			return InvalidV
 		}
-		argV := a.resolveExpr(arg.Value)
+		argV := a.resolveExpr(arg.Value, fb)
+		if !a.requireValue(arg, argV) {
+			return InvalidV
+		}
 		if argV == InvalidV {
 			a.errorF(arg, "unknown expression `%T`", arg.Value)
 			return InvalidV
@@ -1029,6 +1309,7 @@ func (a *Analyzer) resolveStructConstruction(st *StructT, expr *ast.CallExpr) Va
 
 func (a *Analyzer) resolveVariantConstruction(
 	e *EnumT, tag int, variant *EnumVariant, expr *ast.CallExpr,
+	fb *FunctionBody,
 ) Value {
 	var args []VariantArg
 	for _, f := range variant.Fields {
@@ -1038,36 +1319,163 @@ func (a *Analyzer) resolveVariantConstruction(
 			args = append(args, VariantArg{Name: f.Name, Value: InvalidV})
 			continue
 		}
-		argValue := a.resolveExpr(arg.Value)
+		argValue := a.resolveExpr(arg.Value, fb)
+		if !a.requireValue(arg, argValue) {
+			return InvalidV
+		}
 		args = append(args, VariantArg{Name: f.Name, Value: argValue})
 	}
 	return &EnumVariantV{Enum: e, Tag: tag, Args: args}
 }
 
-func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr) Value {
-	leftVal := a.resolveExpr(expr.Left)
+func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
+	leftVal := a.resolveExpr(expr.Left, fb)
 	switch t := leftVal.(type) {
 	case *StructV:
-		return a.resolveStructConstruction(t.Type, expr)
+		return a.resolveStructConstruction(t.Type, expr, fb)
 	case *EnumConstructorV:
 		variant := &t.Enum.Variants[t.Tag]
-		return a.resolveVariantConstruction(t.Enum, t.Tag, variant, expr)
+		return a.resolveVariantConstruction(t.Enum, t.Tag, variant, expr, fb)
 	}
 	switch t := leftVal.GetType().(type) {
 	case *FunctionT:
-		return a.resolveFunctionCall(t, expr)
+		return a.resolveFunctionCall(t, expr, fb)
 	}
 	return InvalidV
 }
 
-func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr) Value {
+func compare[T cmp.Ordered](op Operator, a, b T) (result, ok bool) {
+	switch op {
+	case OpEq:
+		return a == b, true
+	case OpNeq:
+		return a != b, true
+	case OpLt:
+		return a < b, true
+	case OpLTE:
+		return a <= b, true
+	case OpGt:
+		return a > b, true
+	case OpGte:
+		return a >= b, true
+	}
+	return false, false
+}
+
+func foldInt(op Operator, a, b int) (Value, error) {
+	if c, ok := compare(op, a, b); ok {
+		return &BoolLiteral{Value: c}, nil
+	}
+	ofErr := fmt.Errorf("integer overflow")
+	ufErr := fmt.Errorf("integer undeflow")
+
+	switch op {
+	case OpAdd:
+		v, of := AddSafe(a, b)
+		if of {
+			return InvalidV, ofErr
+		}
+		return &IntLiteral{Value: v}, nil
+	case OpSub:
+		v, uf := SubSafe(a, b)
+		if uf {
+			return InvalidV, ufErr
+		}
+		return &IntLiteral{Value: v}, nil
+	case OpMul:
+		v, of := MulSafe(a, b)
+		if of {
+			return InvalidV, ofErr
+		}
+		return &IntLiteral{Value: v}, nil
+	case OpDiv:
+		v, uhoh := DivSafe(a, b)
+		if uhoh {
+			return InvalidV, fmt.Errorf("overflow or division by 0")
+		}
+		return &IntLiteral{Value: v}, nil
+	case OpMod:
+		v, uhoh := ModSafe(a, b)
+		if uhoh {
+			return InvalidV, fmt.Errorf("overflow or division by 0")
+		}
+		return &IntLiteral{Value: v}, nil
+	}
+	panic("unreachable")
+}
+
+func foldStr(op Operator, a, b string) (Value, error) {
+	if c, ok := compare(op, a, b); ok {
+		return &BoolLiteral{Value: c}, nil
+	}
+	switch op {
+	case OpAdd:
+		return &StrLiteral{Value: a + b}, nil
+	}
+	panic("invalid operand for string in binary expression")
+}
+
+func foldFloat(op Operator, a, b float64) (Value, error) {
+	if c, ok := compare(op, a, b); ok {
+		return &BoolLiteral{Value: c}, nil
+	}
+	switch op {
+	case OpAdd:
+		return &FloatLiteral{Value: a + b}, nil
+	case OpSub:
+		return &FloatLiteral{Value: a - b}, nil
+	case OpMul:
+		return &FloatLiteral{Value: a * b}, nil
+	case OpDiv:
+		if b == 0 {
+			return nil, fmt.Errorf("division by 0")
+		}
+		return &FloatLiteral{Value: a / b}, nil
+	case OpMod:
+		if b == 0 {
+			return nil, fmt.Errorf("moduleo op by 0")
+		}
+		return &FloatLiteral{Value: math.Mod(a, b)}, nil
+	}
+	panic("unsuppoorted operation on float type")
+}
+
+func foldBool(op Operator, l, r bool) (Value, error) {
+	switch op {
+	case OpEq:
+		return &BoolLiteral{Value: l == r}, nil
+	case OpNeq:
+		return &BoolLiteral{Value: l != r}, nil
+	case OpAnd:
+		return &BoolLiteral{Value: l && r}, nil
+	case OpOr:
+		return &BoolLiteral{Value: l || r}, nil
+	}
+	return nil, fmt.Errorf("`%v` not valid for bool", op)
+}
+
+func foldBinaryValue(op Operator, l, r Value) (Value, error) {
+	switch l := l.(type) {
+	case *IntLiteral:
+		return foldInt(op, l.Value, r.(*IntLiteral).Value)
+	case *StrLiteral:
+		return foldStr(op, l.Value, r.(*StrLiteral).Value)
+	case *FloatLiteral:
+		return foldFloat(op, l.Value, r.(*FloatLiteral).Value)
+	case *BoolLiteral:
+		return foldBool(op, l.Value, r.(*BoolLiteral).Value)
+	}
+	panic("unreachable: operands were type-checked")
+}
+
+func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr, fb *FunctionBody) Value {
 	cv := &CopyV{Node: expr}
-	cv.Value = a.resolveExpr(expr.Value)
+	cv.Value = a.resolveExpr(expr.Value, fb)
 	return cv
 }
 
-func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr) Value {
-	container := a.resolveExpr(expr.Container)
+func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Value {
+	container := a.resolveExpr(expr.Container, fb)
 	switch t := container.(type) {
 	case *EnumV:
 		enumT := t.Type
@@ -1102,7 +1510,24 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr) Value {
 	}
 }
 
-func (a *Analyzer) resolveExpr(expr ast.Expression) Value {
+func (a *Analyzer) resolveBlock(fb *FunctionBody, expr *ast.BlockExpr) *Block {
+	blk := &Block{Type: VoidT}
+	a.enterScope("block")
+	defer a.exitScope()
+	for _, s := range expr.Statements {
+		a.resolveFunctionBodyStmt(fb, blk, s)
+	}
+	return blk
+}
+
+func yieldBlock(node ast.Expression, v Value) *Block {
+	return &Block{
+		Statements: []Statement{&YieldStmt{Node: node, Value: v}},
+		Type:       v.GetType(),
+	}
+}
+
+func (a *Analyzer) resolveExpr(expr ast.Expression, fb *FunctionBody) Value {
 	switch t := expr.(type) {
 	case *ast.IntegerLiteralExpr:
 		return &IntLiteral{Node: t, Value: int(t.Value)}
@@ -1113,15 +1538,17 @@ func (a *Analyzer) resolveExpr(expr ast.Expression) Value {
 	case *ast.BoolLiteralExpr:
 		return &BoolLiteral{Node: t, Value: t.Value}
 	case *ast.IdentifierExpr:
-		return a.resolveIdentifierExpr(t)
+		return a.resolveIdentifierExpr(t, fb)
 	case *ast.InfixExpr:
-		return a.resolveInfixExpr(t)
+		return a.resolveInfixExpr(t, fb)
 	case *ast.CallExpr:
-		return a.resolveCallExpr(t)
+		return a.resolveCallExpr(t, fb)
 	case *ast.CopyExpr:
-		return a.resolveCopyExpr(t)
+		return a.resolveCopyExpr(t, fb)
 	case *ast.MemberExpr:
-		return a.resolveMemberExpr(t)
+		return a.resolveMemberExpr(t, fb)
+	case *ast.IfExpr:
+		return a.resolveIf(t, fb)
 	}
 	return InvalidV
 }

@@ -8,11 +8,5 @@ var boolLit: bool = true;
 var boolInfix: bool = true or false;
 
 fn add(a: int, b: int) -> int {
-    return a + b;
+    return a + b + intLiteral;
 }
-
-var call: int = add(1, 2);
-
-var callWithVariables: int = add(a=intLiteral, b=intInfix);
-
-var callAndLit: int = add(intLiteral, 2) - 4;

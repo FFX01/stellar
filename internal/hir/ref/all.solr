@@ -30,6 +30,28 @@ type User struct {
     role: Role
 }
 
-var jim = User(name="Jim", age=30, role=Role.Normal);
+fn ifTest(a: int, b: int) -> int {
+    if a > 3 {
+        var c = a + b;
+        return c;
+    } else if a > 5 {
+        return b;
+    } else {
+        return 0;
+    }
+}
 
-var newState: State = State(user=jim);
+fn world() -> str: "World!";
+fn derp() -> str: "Derp!";
+
+fn ifTest2(a: str, b: str) -> str {
+    if a == "hello" {
+        return world();
+    } else derp();
+    return derp();
+}
+
+fn exprIfTest(a: int) -> str {
+    var out = if a > 3 { >> 5; } else 6;
+    return if out < 10 { >> "yes"; } else "no";
+}

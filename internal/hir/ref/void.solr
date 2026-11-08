@@ -1,0 +1,40 @@
+// void values: allowed uses (no errors expected)
+fn greet() -> void: print("hi");
+fn greetNoType(): print("hi");
+fn greetBlock() {
+    return print("hi");
+}
+fn greetStmt() {
+    print("hi");
+}
+fn ifStmt(c: bool) {
+    if c {
+        print("a");
+    } else print("b");
+}
+
+// void values: error cases (one error expected per line marked ERR)
+type VoidField struct {
+    v: void                         // ERR: void field
+}
+
+type P struct {
+    n: int
+}
+
+fn voidParam(v: void) {}            // ERR: void param
+
+fn takesInt(n: int) -> int: n;
+
+fn returnsIntFromVoid() {
+    return 1;                       // ERR: int != void
+}
+
+fn errors() {
+    var a = print("hi");            // ERR: var initializer
+    var b = 1;
+    b = print("hi");                // ERR: assignment
+    takesInt(print("hi"));          // ERR: function argument
+    var p = P(n=print("hi"));       // ERR: constructor argument
+    var c = if true { >> 1; };      // ERR: if without else used as a value
+}

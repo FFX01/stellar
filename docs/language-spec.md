@@ -147,6 +147,12 @@ Writing `int! = Ok(1)` works too. `T?` has no such problem, because
 
 There are no sized integers or floats. A program that needs another width builds it.
 
+**`void` can't be stored or passed.** A `void` value may only be returned from a `void`
+function (§4.2), used as a statement (`print("hi");`), or yielded from a block whose value is
+discarded. Everything else is an error: `var x = print("hi");`, `x = print("hi");`,
+`f(print("hi"))`, a `void` struct field or parameter, and an `if` without `else` used as a
+value (§6.9). `void` as a type argument (`Result[void]`, `void!`) is allowed.
+
 ### 3.2 Named types
 A type is introduced with `type`. After the name, and an optional type-parameter list, one of
 four forms is allowed:
@@ -267,10 +273,11 @@ Two types are the same type when:
 ### 4.1 Top level
 A file is a sequence of: `import`, `fn`, `type`, `impl`, and `var`. `pub` may prefix `fn`,
 `type`, and `var`. Declaration order doesn't matter at the top level: a function can call one
-defined below it, and a type can refer to one defined below it.
+defined below it, and a type can refer to one defined below it. The exception is a constant
+that refers to another constant, which must come after it (§4.6).
 
-A top-level `var` is an immutable binding that functions can read, never change or rebind.
-Top-level `mut` is an error.
+Nothing else is allowed at the top level: an assignment, a rebinding, or any other statement
+there is an error. A top-level `var` is a compile-time constant (§4.6).
 
 ### 4.2 Functions
 ```solr
@@ -286,10 +293,15 @@ pub fn inc(x: int) -> int: x + 1;       // expression body
 - A function whose return type isn't `void` must return a value on every path. A block body
   that can reach its closing `}` is a "missing return" error. A `for` with no condition and no
   `break` counts as never finishing (§6.11).
-- A function body is a block with `return`, or `: expression;`.
+- A function body is a block with `return`, or `: expression;`. An expression body means
+  `{ return expression; }`, for every return type.
+- `void` is a value (§3.1), so a `void` function can return one: `fn greet(): print("hi");`
+  is the same as `fn greet() { return print("hi"); }`. `return 1;` in a `void` function is a
+  type error.
 - A function expression (a lambda) is written the same way, with no name:
   `fn(x: int) -> int: x + 1`. Its type comes from its signature.
-- **Whether a parameter can be rebound** inside the function (`x = ...`) is **[open]**.
+- Parameters are **immutable**. A parameter can't be rebound (`x = ...`) or changed in place
+  (`x.f = v`). To work on a changed version, copy it into a `mut` local: `mut y = @x;` (§5).
 
 ### 4.3 Methods
 Methods are defined in `impl` blocks:
@@ -338,6 +350,29 @@ mut xs: []int = [];
 `import std::fmt;` imports a module by path. Path elements are separated by `::`. The module's
 name is its last element. What a module is (a file or a directory) is **[open]**.
 
+### 4.6 Package-level constants
+```solr
+var key = "somekey";
+var seconds = 60 * 60;      // computed by the compiler
+var divisor = 1.5;
+pub var debug = true;
+```
+- A top-level `var` is a **constant**. The compiler computes its value and stores it in the
+  binary. Functions can read it. Nothing can rebind it or change it, and assigning to it from a
+  function is an error. Top-level `mut` is an error. A `const` keyword may replace `var` here
+  **[provisional]**.
+- Its type is a primitive (`int`, `float`, `str`, `bool`) or a container of primitives.
+- The initializer is built from literals, other constants, and the operators of §9.1 only,
+  including `+` on `str` (concatenation). It is evaluated with the same rules as at run time,
+  including floor division (§9.2).
+- A constant may refer to another constant (`var day = seconds * 24;`), but this is
+  discouraged. As with variables in a function body, the constant it refers to must be
+  declared **above** it. A function can read any constant, wherever it is declared.
+- Anything that needs evaluation at run time is an error: function calls (`env("key")`),
+  struct construction (`User(name="Tim")`), enum variants (`Action.List`), and control flow
+  (`if`, `switch`, `for`, blocks, `try`).
+- Dividing by zero and integer overflow in an initializer are compile errors.
+
 ---
 
 ## 5. Values, mutability, and copying
@@ -358,8 +393,9 @@ This section is the core of the language.
 | Change contents: `x.f = v`, `x[i] = v`, `x += 1`, `x.push(v)` | **error** | allowed |
 | Where it applies | its function | its function only |
 
-- **Rebinding** points the name at a different value. It's always allowed for a variable in
-  the current function, and doesn't change any value.
+- **Rebinding** points the name at a different value. It's always allowed for a variable
+  declared in the current function, and doesn't change any value. Parameters (§4.2) and
+  package-level constants (§4.6) can't be rebound.
 - **Changing contents** modifies a value in place. It needs `mut`.
 - A `mut` variable is mutable only inside the function that declares it. Blocks (`if`, `for`,
   `switch` arms) are **not** boundaries. Functions and closures are.
@@ -370,8 +406,8 @@ This section is the core of the language.
       s = update(s, cmd);        // updates the outer `s`
   }
   ```
-- Parameters, `for` bindings, and top-level `var`s are never mutable. Top-level `mut` is an
-  error.
+- Parameters, `for` bindings, and top-level `var`s are never mutable. A parameter is never
+  changed in place: allowing it would force a copy at every call. Top-level `mut` is an error.
 
 ### 5.2 Copies
 - Assigning (`var b = a;`), passing (`f(a)`), storing (`h.item = a;`), and binding a loop
@@ -449,7 +485,8 @@ fn g(t: mut Todo) { }                 // error: there are no mutable parameters
 - Mutation can't cross a function call. A helper that "changes" something returns the new value,
   and the caller rebinds or destructures: `s = update(s, msg);`.
 - Shared mutable resources (a database connection, a cache) can't be values. They need a
-  context parameter, package-level read-only handles, or a dedicated actor (§12).
+  context parameter or a dedicated actor (§12). Package-level handles are not possible, because
+  package-level values are compile-time constants (§4.6).
 - Graph-shaped data (cycles, back-references) uses IDs into a collection.
 - A shared mutable reference type (`ref`) may be added later **[open]**. It would be explicit
   and discouraged.
@@ -1130,7 +1167,6 @@ lexer errors reported separately from parse errors.
 Consolidated from the markers above.
 
 **Values and mutability**
-- Can a parameter be rebound inside its function?
 - Do omitted struct fields follow §3.4? Will per-field defaults be added?
 - A `ref` type for shared mutable state, if ever.
 

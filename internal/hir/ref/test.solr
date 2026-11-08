@@ -1,0 +1,9 @@
+var name = "jim";
+var age = 20;
+var isold = age > 50;
+var lastName = "Testa";
+var fullName = name + " " + lastName;
+
+fn add(a: int, b: int) -> int: a + b;
+
+var doubleAge: int = add(age, age);
