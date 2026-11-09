@@ -254,9 +254,20 @@ type Value interface {
 }
 
 var (
-	PrintV = &FunctionV{Name: "print", Type: PrintT}
-	LenV   = &FunctionV{Name: "len", Type: LenT}
+	PrintV   = &FunctionV{Name: "print", Type: PrintT}
+	LenV     = &FunctionV{Name: "len", Type: LenT}
+	InvalidV = &InvalidValue{}
+	VoidV    = &VoidValue{}
 )
+
+type SliceRange struct {
+	Node     *ast.SliceExpr
+	StartArg Value
+	EndArg   Value
+}
+
+func (sv *SliceRange) val()          {}
+func (sv *SliceRange) GetType() Type { return VoidT }
 
 type VariantConstruction struct {
 	Type *VariantT
@@ -346,6 +357,16 @@ type FunctionCall struct {
 func (fc *FunctionCall) val()          {}
 func (fc *FunctionCall) GetType() Type { return fc.Type }
 
+type IndexAccess struct {
+	Node     *ast.SubscriptExpr
+	Receiver Value
+	Argument Value
+	Type     Type
+}
+
+func (ia *IndexAccess) val()          {}
+func (ia *IndexAccess) GetType() Type { return ia.Type }
+
 type Constant struct {
 	Node  *ast.VarStmt
 	Name  string
@@ -380,12 +401,15 @@ type BinaryValue struct {
 func (bv *BinaryValue) val()          {}
 func (bv *BinaryValue) GetType() Type { return bv.Type }
 
-var InvalidV = &InvalidValue{}
-
 type InvalidValue struct{}
 
 func (iv *InvalidValue) val()          {}
 func (iv *InvalidValue) GetType() Type { return InvalidT }
+
+type VoidValue struct{}
+
+func (vv *VoidValue) val()          {}
+func (vv *VoidValue) GetType() Type { return VoidT }
 
 type SeqLiteral struct {
 	Node   *ast.SequenceLiteral
@@ -1821,6 +1845,98 @@ func (a *Analyzer) resolveSequenceLiteral(
 	return sl
 }
 
+func (a *Analyzer) resolveSliceExpr(
+	se *ast.SliceExpr, fb *FunctionBody,
+) (Value, Value) {
+	var start, end Value
+	if se.Start != nil {
+		startV := a.resolveExpr(se.Start, fb, nil)
+		if err := requireValidValue(startV); err != nil {
+			a.addError(se.Start, err)
+			return InvalidV, InvalidV
+		} else {
+			start = startV
+		}
+	} else {
+		start = &IntLiteral{Value: 0}
+	}
+
+	if se.End != nil {
+		endV := a.resolveExpr(se.End, fb, nil)
+		if err := requireValidValue(endV); err != nil {
+			a.addError(se.End, err)
+		} else {
+			end = endV
+		}
+	}
+	return start, end
+}
+
+func requireValidValue(v Value) error {
+	switch {
+	case v == InvalidV:
+		return fmt.Errorf("`invalid` used as value")
+	case v.GetType() == InvalidT:
+		return fmt.Errorf("value has invalid type")
+	case v.GetType() == VoidT:
+		return fmt.Errorf("value has type `void` and cannot be used here")
+	default:
+		return nil
+	}
+}
+
+func (a *Analyzer) resolveSubscriptExpr(
+	ss *ast.SubscriptExpr, fb *FunctionBody,
+) Value {
+	receiverV := a.resolveExpr(ss.Receiver, fb, nil)
+
+	var argumentV Value
+	if sr, ok := ss.Argument.(*ast.SliceExpr); ok {
+		var startV, endV Value
+		startV, endV = VoidV, VoidV
+		if sr.Start != nil {
+			startV = a.resolveExpr(sr.Start, fb, nil)
+		}
+		if sr.End != nil {
+			endV = a.resolveExpr(sr.End, fb, nil)
+		}
+		argumentV = &SliceRange{Node: sr, StartArg: startV, EndArg: endV}
+	} else {
+		argumentV = a.resolveExpr(ss.Argument, fb, nil)
+	}
+
+	if err := requireValidValue(receiverV); err != nil {
+		a.addError(ss.Receiver, err)
+		return InvalidV
+	}
+	if argumentV == InvalidV {
+		a.errorF(ss.Argument, "invalid argument for subscript expr")
+		return InvalidV
+	}
+
+	switch t := receiverV.GetType().(type) {
+	case *SliceT:
+		ia := &IndexAccess{
+			Node: ss, Receiver: receiverV, Argument: argumentV,
+			Type: t.ElementType,
+		}
+		if argumentV.GetType() == IntT {
+			return ia
+		} else if _, ok := argumentV.(*SliceRange); ok {
+			ia.Type = &SliceT{ElementType: t.ElementType}
+			return ia
+		} else {
+			a.errorF(ss.Argument, "invalid argument for subscript expr")
+			return InvalidV
+		}
+	default:
+		a.errorF(ss, "invalid subscript access on type `%s`",
+			t.getName(),
+		)
+		return InvalidV
+	}
+}
+
 func (a *Analyzer) resolveExpr(
 	expr ast.Expression, fb *FunctionBody, targetT Type,
 ) Value {
@@ -1849,6 +1965,8 @@ func (a *Analyzer) resolveExpr(
 		return a.resolveSwitch(t, fb, true)
 	case *ast.SequenceLiteral:
 		return a.resolveSequenceLiteral(t, fb, targetT)
+	case *ast.SubscriptExpr:
+		return a.resolveSubscriptExpr(t, fb)
 	}
 	return InvalidV
 }
