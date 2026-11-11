@@ -1,0 +1,272 @@
+// generics reference for the HIR (spec §3.7, §3.8, §4.3).
+// Only functions and methods can be generic. Types and interface methods cannot be generic.
+// Section 1 must produce no errors. Sections 2-4 need other features (see each header).
+// Section 5 has one error per function or declaration, marked ERR on the line it should be
+// reported at.
+
+type Point struct {
+    x: int,
+    y: int
+}
+
+type Todo struct {
+    id: int,
+    title: str
+}
+
+type Dir enum {
+    North,
+    South
+}
+
+// a user interface with `Self`, used as a bound
+type Ordered interface {
+    fn lt(self, other: Self) -> bool
+}
+
+// ---------------------------------------------------------------------------
+// 1. Valid: generic functions, inference, `print`
+// ---------------------------------------------------------------------------
+
+fn identity[T](x: T) -> T: x;
+fn first[T](xs: []T) -> T: xs[0];
+fn wrap[T](x: T) -> []T: [x];
+fn second[A, B](a: A, b: B) -> B: b;
+fn ignore[T](x: T) {}
+
+// the same parameter in several positions
+fn choose[T](a: T, b: T, useA: bool) -> T: if useA { >> a; } else b;
+
+// T inside slices and spreads
+fn concat[T](a: []T, b: []T) -> []T: [...a, ...b];
+fn firstRow[T](grid: [][]T) -> []T: grid[0];
+fn rest[T](xs: []T) -> []T: xs[1:];
+
+// a block body with locals of type T
+fn swapFirst[T](xs: []T, x: T) -> []T {
+    var old = xs[0];
+    var out = [x, old];
+    return out;
+}
+
+// generic functions that call generic functions with their own T
+fn firstWrapped[T](x: T) -> T: first(wrap(x));
+fn twice[T](x: T) -> []T: concat(wrap(x), wrap(x));
+
+// recursion with the same T
+fn last[T](xs: []T) -> T: if len(xs) == 1 { >> xs[0]; } else last(rest(xs));
+
+// calls with each kind of type argument
+fn inference() {
+    var a: int = identity(1);
+    var b: str = identity("a");
+    var c: float = identity(1.5);
+    var d: bool = identity(true);
+    var e: []int = identity([1, 2]);
+    var f: Point = identity(Point(x=1, y=2));
+    var g: Dir = identity(Dir.North);
+    var h: [][]int = wrap([1]);
+    var i: str = second(1, "b");
+    var j: int = choose(1, 2, true);
+    var k: []str = concat(["a"], ["b"]);
+    var l: int = first(firstRow([[1, 2], [3]]));
+    var m: int = firstWrapped(5);
+    ignore(Todo(id=1, title="t"));
+}
+
+// named arguments
+fn namedArgs() -> int {
+    var a = identity(x=1);
+    return choose(1, b=2, useA=false);
+}
+
+// `[]` as an argument after T is known: its type comes from T
+fn emptyAfterKnown() -> []int: concat([1], []);
+
+// the expected type of an argument keeps the caller's own T
+fn passThrough[T](x: T) -> []T: twice(x);
+
+// `print` with its `Stringable` bound: primitives
+fn printPrimitives() {
+    print("hi");
+    print(1);
+    print(1.5);
+    print(true);
+    print(identity(2));
+}
+
+// ---------------------------------------------------------------------------
+// 2. Valid, needs `impl` methods and interfaces with `Self`
+// ---------------------------------------------------------------------------
+
+impl Point {
+    fn string(self) -> str: "point";
+    fn lt(self, other: Self) -> bool: self.x < other.x;
+}
+
+// a bound lets the body call the bound's methods
+fn show[T: Stringable](x: T) -> str: x.string();
+fn min[T: Ordered](a: T, b: T) -> T: if b.lt(a) { >> b; } else a;
+
+fn bounds() {
+    print(Point(x=1, y=2));                         // Point satisfies Stringable
+    var s: str = show(Point(x=1, y=2));
+    var p: Point = min(Point(x=1, y=2), Point(x=0, y=0));
+    var n: str = show(3);
+}
+
+// a bounded function that calls another bounded function with its own T
+fn showTwice[T: Stringable](x: T) -> str: show(x) + show(x);
+
+// generic methods on a concrete type
+impl Todo {
+    fn tag[T](self, value: T) -> []T: [value];
+    fn label[T: Stringable](self, value: T) -> str: self.title + value.string();
+}
+
+fn genericMethods(t: Todo) -> str {
+    var tags: []int = t.tag(1);
+    var names: []str = t.tag("a");
+    return t.label(Point(x=1, y=1));
+}
+
+// ---------------------------------------------------------------------------
+// 3. Valid, needs calls through function-typed values and function literals
+// ---------------------------------------------------------------------------
+
+fn apply[T, U](x: T, f: fn(T) -> U) -> U: f(x);
+
+fn compose[A, B, C](x: A, f: fn(A) -> B, g: fn(B) -> C) -> C: g(f(x));
+
+fn higherOrder() {
+    var n: int = apply("abc", fn(s: str) -> int: len(s));
+    var s: str = apply(1, fn(i: int) -> str: "x");
+    var b: bool = compose(1, fn(i: int) -> str: "x", fn(s: str) -> bool: true);
+}
+
+// a literal inside a generic body uses the enclosing T; the literal itself is not generic
+fn wrapAll[T](x: T) -> [][]T: wrap(apply(x, fn(v: T) -> []T: [v, v]));
+
+// ---------------------------------------------------------------------------
+// 4. Valid, needs `Maybe`, `Result` and `try`
+// ---------------------------------------------------------------------------
+
+fn head[T](xs: []T) -> T? {
+    if len(xs) == 0 {
+        return None();
+    }
+    return Some(xs[0]);
+}
+
+fn at[T](xs: []T, i: int) -> T!: xs.get(i);
+
+fn orElse[T](m: T?, d: T) -> T: try m else d;
+
+fn maybeCalls() {
+    var a: int? = head([1, 2]);
+    var b: str = orElse(head(["a"]), "z");
+}
+
+// ---------------------------------------------------------------------------
+// 5. Errors (one per function or declaration)
+// ---------------------------------------------------------------------------
+
+type Converter interface {
+    fn convert[T](self, x: T) -> T  // ERR: an interface method cannot be generic
+}
+
+impl []int {                        // ERR: the target of `impl` must be a struct or enum
+    fn sum(self) -> int: 0;
+}
+
+fn errNotGeneric(p: Point[int]) {}  // ERR: `Point` is not generic
+
+fn errSelfOutside(x: Self) {}       // ERR: `Self` is only valid in an interface or `impl`
+
+fn errBoundNotInterface[T: int](x: T) {} // ERR: a bound must be an interface
+
+fn errDuplicateParam[T, T](x: T) {} // ERR: redeclaration of `T`
+
+fn errUnusedParam[T]() -> []T: [];  // ERR: `T` is not used in a parameter; cannot be inferred
+
+fn errArithmetic[T](x: T) -> T: x + 1;       // ERR: `+` is not defined on `T`
+
+fn errCompare[T](a: T, b: T) -> bool: a == b; // ERR: `==` is not defined on `T`
+
+fn errNoBoundMethod[T](x: T) -> str: x.string(); // ERR: `T` has no method `string`
+
+fn errWrongParamReturn[A, B](a: A, b: B) -> A: b; // ERR: type `B` != type `A`
+
+fn errConcreteForT[T](x: T) -> T: 1;          // ERR: type `int` != type `T`
+
+fn errConflict() -> int {
+    return choose(1, "a", true);    // ERR: type `str` != type `int` (T is already int)
+}
+
+fn errResultType() {
+    var s: str = identity(1);       // ERR: type `int` != type `str`
+}
+
+fn errEmptyFirst() -> []int {
+    return concat([], [1]);         // ERR: cannot infer the type of `[]` (T is not known yet)
+}
+
+fn errCannotInfer() -> []int {
+    return errUnusedParam();        // ERR: cannot infer type parameter `T`
+}
+
+fn errElementMismatch() -> []int {
+    return concat([1], ["a"]);      // ERR: type `str` != type `int`
+}
+
+fn errSliceExpected() -> int {
+    return first(1);                // ERR: type `int` != type `[]T`
+}
+
+fn errTooManyArgs() -> int {
+    return identity(1, 2);          // ERR: `identity` expects 1 argument, but 2 were passed
+}
+
+fn errVoidArg() {
+    ignore(print("x"));             // ERR: void value cannot be passed
+}
+
+fn errPrintStruct() {
+    print(Todo(id=1, title="t"));   // ERR: `Todo` does not satisfy `Stringable`
+}
+
+fn errPrintSlice() {
+    print([1, 2]);                  // ERR: `[]int` does not satisfy `Stringable`
+}
+
+type BadString struct {
+    n: int
+}
+
+impl BadString {
+    fn string(self) -> int: self.n;
+}
+
+fn errWrongSignature() {
+    print(BadString(n=1));          // ERR: `BadString` method `string` has the wrong signature
+}
+
+type GenericLt struct {
+    n: int
+}
+
+impl GenericLt {
+    fn lt[T](self, other: T) -> bool: true;
+}
+
+fn errGenericMethodForBound() -> GenericLt {
+    // ERR (next line): a generic method does not satisfy `Ordered.lt`
+    return min(GenericLt(n=1), GenericLt(n=2));
+}
+
+fn errBoundInBody[T](x: T) -> str {
+    return show(x);                 // ERR: `T` does not satisfy `Stringable` (T has no bound)
+}
+
+// Reported by monomorphization in codegen, not by the HIR:
+fn grow[T](x: T, n: int) -> int: if n == 0 { >> 0; } else grow([x], n - 1); // ERR (codegen): infinite instantiation

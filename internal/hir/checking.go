@@ -62,6 +62,13 @@ func identical(a, b Type) error {
 			return defaultErr
 		}
 		return identical(at.ElementType, bt.ElementType)
+	case *TypeParamT:
+		bt, ok := b.(*TypeParamT)
+		if !ok || at != bt {
+			return defaultErr
+		} else {
+			return nil
+		}
 	default:
 		return fmt.Errorf("unknown type `%T`", a)
 	}

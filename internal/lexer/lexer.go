@@ -268,8 +268,8 @@ func (l *Lexer) nextToken() Token {
 		} else {
 			t = Token{Type: MUL, Literal: string(l.ch), Position: pos}
 		}
-	case '@':
-		t = Token{Type: COPY, Literal: string(l.ch), Position: pos}
+	// case '@':
+	// 	t = Token{Type: COPY, Literal: string(l.ch), Position: pos}
 	case ':':
 		if l.peek() == ':' {
 			t = Token{Type: DCOLON, Literal: "::", Position: pos}

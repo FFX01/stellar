@@ -5,16 +5,16 @@ type State struct {
 
 fn initState() -> State {
     var user = User(name="tim", age=30, role=Role.Contractor(company="acme"));
-    mut s = State(count=1, user=user);
+    var s = State(count=1, user=user);
     return s;
 }
 
 fn setUser(s: State, name: str, age: int) -> State {
     var newUser = User(name=name, age=age, role=Role.Normal);
-    mut newS = @s;
+    var newS = s;
     newS = State(user=newUser);
-    newS.user = newUser;
-    newS.user.name = "tommy";
+    newS = newS.with(user=newUser);
+    newS = newS.with(user=newS.user.with(name="tommy"));
     return newS;
 }
 

@@ -1,7 +1,8 @@
 // slice reference for the HIR (spec §3.3, §5.1–§5.3, §6.7, §9.1, §10.2).
+// Values are never changed in place. A variable is updated by a rebind to a new value.
 // Section 1 must produce no errors. Sections 2 and 3 need `for` and `Result`/`try`.
 // Sections 4 and 5 have one error per function, marked ERR on the line it should be reported
-// at. Section 5 needs the mutability checks.
+// at. Section 5 has the assignment and rebinding errors.
 
 type Bag struct {
     name: str,
@@ -45,7 +46,7 @@ fn emptyLiterals() -> []int {
     var a: []int = [];
     var b = takeInts([]);
     var bag = Bag(name="empty", items=[]);
-    mut c: []str = ["x"];
+    var c: []str = ["x"];
     c = [];
     return [];
 }
@@ -144,38 +145,36 @@ fn rebinding() -> []int {
     return xs;
 }
 
-// in-place changes on a `mut`
-fn inPlace() -> []int {
-    mut xs = [3, 1, 2];
-    xs[0] = 5;
-    xs[1] += 1;
-    xs.push(4);
-    xs.sort();
+// updates make a new value, and a rebind gives it the old name (§5.3)
+fn updates() -> []int {
+    var xs = [3, 1, 2]
+        .replace(0, 5);
+    xs = xs
+        .replace(1, xs[1] + 1)
+        .append(4);
+    xs = [...xs, 5];
     return xs;
 }
 
-// in-place changes through nested elements and fields
-fn nestedInPlace() -> Grid {
-    mut grid = Grid(rows=[[1, 2], [3]]);
-    grid.rows[0][1] = 7;
-    grid.rows[1].push(4);
-    grid.rows.push([]);
+// nested updates through elements and fields
+fn nestedUpdates() -> Grid {
+    var grid = Grid(rows=[[1, 2], [3]]);
+    grid = grid.with(rows=grid.rows.replace(0, grid.rows[0].replace(1, 7)));
+    grid = grid.with(rows=grid.rows.replace(1, grid.rows[1].append(4)));
+    grid = grid.with(rows=grid.rows.append([]));
+    grid = Grid(...grid, rows=[...grid.rows, []]);   // spread form [provisional]
 
-    mut bags = [Bag(name="a", items=[])];
-    bags[0].name = "b";
-    bags[0].items.push(1);
+    var bags = [Bag(name="a", items=[])];
+    bags = bags.replace(0, bags[0].with(name="b", items=bags[0].items.append(1)));
     return grid;
 }
 
-// `@` makes a mutable copy of a param, an element or a slice
-fn copies(xs: []int, grid: [][]int) -> []int {
-    mut a = @xs;
-    mut b = @xs[1:3];
-    mut c = @grid[0];
-    a.push(1);
-    b[0] = 2;
-    c.push(3);
-    return a;
+// parameters are never changed: bind the new value to a local
+fn fromParams(xs: []int, grid: [][]int) -> []int {
+    var a = xs.append(1);
+    var b = xs[1:3].replace(0, 2);
+    var c = grid[0].append(3);
+    return [...a, ...b, ...c];
 }
 
 // a slice expression can initialize a `var`
@@ -208,7 +207,7 @@ fn lenSwitch(xs: []int) -> str {
 // ---------------------------------------------------------------------------
 
 fn sum(xs: []int) -> int {
-    mut total = 0;
+    var total = 0;
     for _, x in xs {
         total += x;
     }
@@ -216,15 +215,15 @@ fn sum(xs: []int) -> int {
 }
 
 fn indexes(xs: []str) -> []int {
-    mut out: []int = [];
+    var out: []int = [];
     for i, _ in xs {
-        out.push(i);
+        out = out.append(i);
     }
     return out;
 }
 
 fn nestedLoops(grid: [][]int) -> int {
-    mut total = 0;
+    var total = 0;
     for _, row in grid {
         for _, x in row {
             total += x;
@@ -335,19 +334,21 @@ fn errFieldOnSlice(xs: []int) -> int {
     return xs.length;                   // ERR: []int has no field `length`
 }
 
-fn errPushType() {
-    mut xs = [1];
-    xs.push("a");                       // ERR: str != int
+fn errReplaceType(xs: []int) -> []int {
+    return xs.replace(0, "a");          // ERR: str != int
 }
 
-fn errAssignElementType() {
-    mut xs = [1];
-    xs[0] = "a";                        // ERR: str != int
+fn errReplaceIndexType(xs: []int) -> []int {
+    return xs.replace("a", 1);          // ERR: index must be int
+}
+
+fn errRemovedMethod(xs: []int) -> []int {
+    return xs.push(1);                  // ERR: []int has no method `push`
 }
 
 fn errAssignSliceExpr() {
-    mut xs = [1, 2, 3];
-    xs[0:2] = [4, 5];                   // ERR: a slice expression isn't an assignment target
+    var xs = [1, 2, 3];
+    xs[0:2] = [4, 5];                   // ERR: a slice expression is not an assignment target
 }
 
 fn errSliceSubject(xs: []int) -> int {
@@ -359,52 +360,60 @@ fn errSliceSubject(xs: []int) -> int {
 var errConstStructs = [Bag(name="a", items=[])]; // ERR: not a constant (struct construction)
 
 // ---------------------------------------------------------------------------
-// 5. Errors, needs the mutability checks (one per function)
+// 5. Errors: assignment and rebinding (one per function)
 // ---------------------------------------------------------------------------
 
-fn errAssignElementOnVar() {
+fn errAssignElement() {
     var xs = [1];
-    xs[0] = 2;                          // ERR: `xs` is not mutable
+    xs[0] = 2;                          // ERR: an element cannot be assigned; use `replace`
 }
 
-fn errPushOnVar() {
+fn errAssignNestedElement() {
+    var grid = [[1]];
+    grid[0][0] = 2;                     // ERR: an element cannot be assigned
+}
+
+fn errAssignField() {
+    var bag = Bag(name="a", items=[]);
+    bag.items = [1];                    // ERR: a field cannot be assigned; use `with`
+}
+
+fn errAssignFieldElement() {
+    var bag = Bag(name="a", items=[1]);
+    bag.items[0] = 2;                   // ERR: an element cannot be assigned
+}
+
+fn errCompoundElement() {
     var xs = [1];
-    xs.push(2);                         // ERR: push needs a `mut` receiver
-}
-
-fn errAssignElementOnParam(xs: []int) {
-    xs[0] = 2;                          // ERR: parameters are immutable
-}
-
-fn errPushOnParam(xs: []int) {
-    xs.push(1);                         // ERR: parameters are immutable
-}
-
-fn errSortOnParam(xs: []int) {
-    xs.sort();                          // ERR: parameters are immutable
-}
-
-fn errNestedOnParam(grid: [][]int) {
-    grid[0][0] = 1;                     // ERR: parameters are immutable
-}
-
-fn errMutFromVar(xs: []int) {
-    mut ys = xs;                        // ERR: use `@` to make a mutable copy
-}
-
-fn errMutFromSlice(xs: []int) {
-    mut part = xs[1:3];                 // ERR: a slice isn't a fresh value; use `@`
-}
-
-fn errMutFromElement(grid: [][]int) {
-    mut row = grid[0];                  // ERR: an element isn't a fresh value; use `@`
+    xs[0] += 1;                         // ERR: an element cannot be assigned
 }
 
 fn errAssignStr() {
-    mut s = "abc";
-    s[0] = "x";                         // ERR: str is immutable text
+    var s = "abc";
+    s[0] = "x";                         // ERR: an element cannot be assigned
 }
 
-fn errAssignConst() {
-    primes[0] = 1;                      // ERR: constants can't be changed
+fn errRebindParam(xs: []int) {
+    xs = xs.append(1);                  // ERR: a parameter cannot be rebound
+}
+
+fn errRebindConst() {
+    primes = [];                        // ERR: a constant cannot be rebound
+}
+
+fn errRebindType() {
+    var xs = [1];
+    xs = ["a"];                         // ERR: []str != []int
+}
+
+fn errCompoundSlice() {
+    var xs = [1];
+    xs += [2];                          // ERR: `+` not defined on []int (use spread)
+}
+
+// needs `for`
+fn errRebindLoopBinding(xs: []int) {
+    for _, x in xs {
+        x = 1;                          // ERR: a loop binding cannot be rebound
+    }
 }

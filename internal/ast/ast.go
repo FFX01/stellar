@@ -556,7 +556,6 @@ type TypeDeclStmt struct {
 	Name       string
 	IsPublic   bool
 	Definition Type
-	TypeParams []*TypeParameter
 }
 
 func (t *TypeDeclStmt) TokenLiteral() string { return t.Token.Literal }
@@ -564,11 +563,10 @@ func (t *TypeDeclStmt) Pos() lexer.Position  { return t.Token.Position }
 func (t *TypeDeclStmt) stmt()                {}
 func (t *TypeDeclStmt) String() string {
 	return fmt.Sprintf(
-		"TypeDeclStmt (%v, %s, %s, %s)",
+		"TypeDeclStmt (%v, %s, %s)",
 		t.IsPublic,
 		t.Name,
 		pointerToString(t.Definition),
-		sliceToString(t.TypeParams),
 	)
 }
 
@@ -666,20 +664,22 @@ func (f *FunctionType) String() string {
 
 type TypeParameter struct {
 	Token lexer.Token
+	Bound Type
 }
 
 func (t *TypeParameter) TokenLiteral() string { return t.Token.Literal }
 func (t *TypeParameter) Pos() lexer.Position  { return t.Token.Position }
 func (t *TypeParameter) String() string {
-	return fmt.Sprintf("TypeParameter (%s)", t.Token.Literal)
+	return fmt.Sprintf(
+		"TypeParameter (%s, %s)", t.Token.Literal, pointerToString(t.Bound),
+	)
 }
 
 type TypeAliasStmt struct {
-	Token      lexer.Token
-	Name       string
-	Value      Type
-	IsPublic   bool
-	TypeParams []*TypeParameter
+	Token    lexer.Token
+	Name     string
+	Value    Type
+	IsPublic bool
 }
 
 func (t *TypeAliasStmt) TokenLiteral() string { return t.Token.Literal }
@@ -687,11 +687,10 @@ func (t *TypeAliasStmt) Pos() lexer.Position  { return t.Token.Position }
 func (t *TypeAliasStmt) stmt()                {}
 func (t *TypeAliasStmt) String() string {
 	return fmt.Sprintf(
-		"TypeAliasStmt (%v, %s, %s, %s)",
+		"TypeAliasStmt (%v, %s, %s)",
 		t.IsPublic,
 		t.Name,
 		pointerToString(t.Value),
-		sliceToString(t.TypeParams),
 	)
 }
 

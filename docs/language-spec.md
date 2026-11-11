@@ -1,8 +1,8 @@
 # The Stellar Language Specification
 
 > This is the reference for the Stellar language: its syntax, its type system, and its
-> rules for values and mutability. It describes the language as decided on branch
-> `immutability` as of 2026-10-28.
+> rules for values and bindings. It describes the language as decided on branch
+> `immutability` as of 2026-11-10.
 >
 > **Authority.** Where this document disagrees with `docs/design.md` or
 > `docs/value-semantics.md`, this document wins. Those two files are kept as the record of
@@ -24,7 +24,7 @@
 2. Lexical structure
 3. Types
 4. Declarations
-5. Values, mutability, and copying
+5. Values and bindings
 6. Expressions
 7. Statements
 8. Errors and absence
@@ -45,14 +45,14 @@
 - **General purpose and garbage collected.** There is no manual memory management.
 - **Values are immutable.** Assigning, passing, or storing a value gives the receiver its
   own value. Nobody can change a value somebody else holds.
-- **Mutation is local.** Inside one function you can declare a `mut` variable and change it
-  in place. The change is visible only inside that function.
+- **No mutation.** No value is ever changed in place. A variable can be rebound to a new
+  value inside the function that declares it. That is the only kind of change.
 - **No null, no exceptions.** A value that might be missing is a `Maybe`. An operation that
   might fail returns a `Result`. The language panics only on programmer errors (`must`,
   out-of-range indexing).
 - **No implicit conversions.** `1 + 1.0` is a compile error.
-- **Explicit mutability.** A reader can tell from the declaration whether something can
-  change (`var` or `mut`), and where a copy is made (`@`).
+- **Visible change.** Each change of a variable is an assignment with the variable name on
+  the left: `x = e;` or `x += e;`. Functions and methods never change their arguments.
 - **Structural interfaces.** A type satisfies an interface by having its methods.
 - **Phases.** Lexer, parser, checker, compiler. The parser records what was written, and
   the checker enforces the rules in this document.
@@ -85,7 +85,7 @@ Every other type, built-in or user-defined, is `PascalCase` (`Result`, `Maybe`, 
 ### 2.3 Keywords
 ```
 if  else  switch  for  in  as  break  continue  return
-var  mut  fn  type  impl  struct  enum  interface  pub  import
+var  fn  type  impl  struct  enum  interface  pub  import
 try  must  and  or  true  false  Ok  Err  Some  None
 ```
 `Ok` and `Err` are keywords because they are constructors of the built-in `Result` type, and
@@ -114,7 +114,7 @@ and  or  !                      logical
 =  +=  -=  *=  /=  %=           assignment
 .  ::  :  ,  ;                  member, module path, slice/annotation, separators
 ->  =>  >>                      return type, switch arm, yield
-@  |  ( )  [ ]  { }             copy, try-binding, grouping
+|  ( )  [ ]  { }                try-binding, grouping
 ...                              spread
 ?                                Maybe suffix in types (`T?`)
 ```
@@ -154,8 +154,8 @@ discarded. Everything else is an error: `var x = print("hi");`, `x = print("hi")
 value (§6.9). `void` as a type argument (`Result[void]`, `void!`) is allowed.
 
 ### 3.2 Named types
-A type is introduced with `type`. After the name, and an optional type-parameter list, one of
-four forms is allowed:
+A type is introduced with `type`. After the name, one of four forms is allowed. A named type
+can't have type parameters (§3.8).
 
 ```solr
 type Point struct { pub x: int, pub y: int }          // a record
@@ -196,7 +196,8 @@ type Todo struct {
   must be given. Per-field defaults may be added later.
 - **Updated copies:** `todo.with(title="y")` returns a copy with the listed fields replaced.
   `Todo(...todo, title="y")` means the same **[provisional]** (the spread token is `...`).
-- Fields are read with `.`: `todo.title`. Assigning to a field needs a `mut` variable (§5).
+- Fields are read with `.`: `todo.title`. A field cannot be assigned: `todo.title = "y";` is
+  an error. Use `with` or a spread to make an updated value (§5.3).
 
 ### 3.5 Enums
 An enum is a tagged union. Each variant may carry named fields.
@@ -236,22 +237,51 @@ type Shape interface {
   signatures. There is no `implements` declaration, and the consumer declares the interface.
 - Interface methods are always public, so `pub` is not allowed on them.
 - Every interface method takes `self`, written without a type (§4.3).
-- There is no `Self` type. A method that needs "the same type as the receiver" for another
-  parameter or the result (equality, ordering) belongs in a generic interface, such as
-  `type Eq[T] interface { fn equals(self, other: T) -> bool }`, which `Rect` satisfies as
-  `Eq[Rect]`. Generic interfaces are part of the generics work (§3.8).
+- **`Self`** is the type that implements the interface. It can be a parameter type or the
+  result type, also inside other types (`[]Self`, `Self?`):
+  ```solr
+  type Comparable interface {
+      fn eq(self, other: Self) -> bool
+      fn lt(self, other: Self) -> bool
+  }
+  ```
+  `Rect` satisfies `Comparable` with `fn eq(self, other: Rect) -> bool`. To check a method, the
+  checker replaces `Self` with the implementing type, then compares the signatures.
+- In an `impl` block, `Self` is the type of the block: in `impl Rect`, `Self` means `Rect`.
+  `Self` anywhere else (a function outside `impl`, a field, a `var`) is an error.
+- An interface can't have type parameters, and its methods can't have type parameters
+  (§3.8).
 - Whether the checker also requires `pub` on the implementing methods is **[open]**.
 
 ### 3.8 Generics
-Type parameters are listed in square brackets after the name:
+**Only functions and methods can be generic.** Type parameters are listed in square brackets
+after the name:
 ```solr
-type Pair[A, B] struct { pub first: A, pub second: B }
 fn first[T](xs: []T) -> T!: xs.get(0);
+fn map[A, B](xs: []A, f: fn(A) -> B) -> []B { ... }
+fn max[T: Comparable](a: T, b: T) -> T: if b.lt(a) { >> a; } else b;
 ```
-- They apply to structs, enums, interfaces, aliases, and functions.
-- Type arguments at a call are **inferred**. There is no explicit-argument syntax in
-  expressions, because `[` after an expression always means indexing.
-- Constraints: `[T, E, S: Iterable[E]]` **[provisional]**.
+- **Built-in generic types:** `[]T`, `Result[T]` (`T!`), `Maybe[T]` (`T?`), and function
+  types. Maps and tuples will also be built-in generic types (§17). Only the compiler can
+  declare a generic type.
+- **User types can't be generic.** Structs, enums, interfaces, and aliases have no type
+  parameters: `type Pair[A, B] struct { ... }` is an error. Use a tuple, or declare one
+  concrete type for each element type.
+- **Methods** on a concrete type can be generic (`fn mapTitles[U](self, f: fn(str) -> U) -> []U`).
+  An interface method can't be generic. Thus a generic method never satisfies an interface
+  method.
+- **Inference:** type arguments at a call are always inferred from the arguments. There is
+  no explicit-argument syntax in expressions, because `[` after an expression always means
+  indexing. Each type parameter must appear in the type of at least one parameter, or the
+  function can't be called.
+- **Inside a generic body**, a value of type `T` can be passed, stored, and returned. It can
+  also call the methods of the bound of `T`. Nothing else is allowed: `x + 1` with `x: T` is
+  an error. Errors are reported at the declaration, not at each call.
+- **Bounds:** `[T: Comparable]` means that `T` must satisfy the interface `Comparable`. The
+  bound is an interface **[provisional]**. Several bounds on one parameter are **[open]**.
+- **Compilation:** each set of type arguments gets its own compiled copy of the function
+  (monomorphization). A recursive generic function that needs an endless number of copies
+  (`fn f[T](x: T) -> int: f([x]);`) is an error.
 - Checking generic code is **[not implemented]** in the checker's first version.
 
 ### 3.9 Function types
@@ -291,7 +321,6 @@ pub fn inc(x: int) -> int: x + 1;       // expression body
 ```
 - **Parameter types are required**, and so is the return type unless the function returns
   `void`. The parser accepts the omission, and the checker reports it.
-- Parameters are **never mutable**. `fn f(x: mut T)` is an error.
 - A function whose return type isn't `void` must return a value on every path. A block body
   that can reach its closing `}` is a "missing return" error. A `for` with no condition and no
   `break` counts as never finishing (§6.11).
@@ -302,8 +331,8 @@ pub fn inc(x: int) -> int: x + 1;       // expression body
   type error.
 - A function expression (a lambda) is written the same way, with no name:
   `fn(x: int) -> int: x + 1`. Its type comes from its signature.
-- Parameters are **immutable**. A parameter can't be rebound (`x = ...`) or changed in place
-  (`x.f = v`). To work on a changed version, copy it into a `mut` local: `mut y = @x;` (§5).
+- Parameters **cannot be rebound** (`x = ...` is an error). To work on a changed version,
+  bind the new value to a local: `var y = x.with(f=v);` (§5).
 
 ### 4.3 Methods
 Methods are defined in `impl` blocks:
@@ -328,8 +357,9 @@ impl Point {
       pub fn origin(self) -> bool { return self.x == 0 and self.y == 0; }
   }
   ```
-- The target may carry type arguments (`impl Pair[A, B] { ... }`). It parses, but what it means
-  is **[open]**.
+- The target is a concrete struct or enum, with no type arguments. `impl` on a built-in type
+  (`impl []int`) is an error. The methods of built-in types come from the compiler (§10.2).
+- A method can have type parameters (§3.8). `Self` in a method means the target type (§3.7).
 - A method is called with `value.method(args)`.
 - Static functions (no `self`) called as `Type.fn(...)` are needed **[provisional]**.
 - A method and a field with the same name on one type are an error **[provisional]**.
@@ -338,8 +368,7 @@ impl Point {
 ```solr
 var x = 1;                  // immutable binding, type inferred
 var y: float = 2.0;         // with a type annotation
-mut total = 0;              // mutable local (§5)
-mut xs: []int = [];
+x = x + 1;                  // rebinding (§5.1)
 ```
 - An initializer is **required**. `var x: int;` is an error.
 - The annotation is optional. When present, the initializer must match it.
@@ -360,9 +389,8 @@ var divisor = 1.5;
 pub var debug = true;
 ```
 - A top-level `var` is a **constant**. The compiler computes its value and stores it in the
-  binary. Functions can read it. Nothing can rebind it or change it, and assigning to it from a
-  function is an error. Top-level `mut` is an error. A `const` keyword may replace `var` here
-  **[provisional]**.
+  binary. Functions can read it. Nothing can rebind it, and assigning to it from a function is
+  an error. A `const` keyword may replace `var` here **[provisional]**.
 - Its type is a primitive (`int`, `float`, `str`, `bool`) or a container of primitives.
 - The initializer is built from literals, other constants, and the operators of §9.1 only,
   including `+` on `str` (concatenation). It is evaluated with the same rules as at run time,
@@ -377,115 +405,109 @@ pub var debug = true;
 
 ---
 
-## 5. Values, mutability, and copying
+## 5. Values and bindings
 
 This section is the core of the language.
 
-> Every value is immutable. Assigning, passing, or storing a value gives the receiver its own
-> value, so nobody else can change what you hold. Inside a function you may declare a variable
-> with `mut` and change its contents in place. That change is visible only inside the function.
-> A value that leaves the function (returned, passed, or captured) is immutable again. To change
-> a value it was given, a function copies it first with `@`, changes the copy, and returns it.
+> Every value is immutable. No operation changes a value in place. Assigning, passing, or
+> storing a value gives the receiver its own value, so nobody else can change what you hold.
+> A variable can be rebound to a new value inside the function that declares it. To get a
+> changed value, you make a new one (`with`, a spread, `append`) and bind it to a name.
 
 ### 5.1 Bindings
+`var x = e;` declares a variable. Inside the function that declares it, the variable can be
+**rebound**: `x = e2;` points the name at a different value. Rebinding changes no value.
 
-| | `var x = e;` | `mut x = e;` |
-|---|---|---|
-| Rebind: `x = e2;` | allowed | allowed |
-| Change contents: `x.f = v`, `x[i] = v`, `x += 1`, `x.push(v)` | **error** | allowed |
-| Where it applies | its function | its function only |
+| Can be rebound | Cannot be rebound |
+|---|---|
+| a `var` declared in the current function | a parameter (§4.2) |
+| | a package-level constant (§4.6) |
+| | a `for` binding (§6.11) and an `as` binding (§6.10) |
+| | a variable of a parent function, from inside a closure (§5.4) |
 
-- **Rebinding** points the name at a different value. It's always allowed for a variable
-  declared in the current function, and doesn't change any value. Parameters (§4.2) and
-  package-level constants (§4.6) can't be rebound.
-- **Changing contents** modifies a value in place. It needs `mut`.
-- A `mut` variable is mutable only inside the function that declares it. Blocks (`if`, `for`,
-  `switch` arms) are **not** boundaries. Functions and closures are.
-- Rebinding inside an inner block updates the outer variable:
+- `x += e` (and `-=`, `*=`, `/=`, `%=`) is a rebind: it means `x = x + e`.
+- The target of an assignment is always a variable name. A field (`s.f = v`) or an element
+  (`xs[i] = v`) is not a valid target (§5.3).
+- Blocks (`if`, `for`, `switch` arms) are **not** boundaries. Rebinding inside an inner block
+  rebinds the outer variable:
   ```solr
   var s = State(todos=[]);
   for _, cmd in commands {
-      s = update(s, cmd);        // updates the outer `s`
+      s = update(s, cmd);        // rebinds the outer `s`
   }
   ```
-- Parameters, `for` bindings, and top-level `var`s are never mutable. A parameter is never
-  changed in place: allowing it would force a copy at every call. Top-level `mut` is an error.
 
 ### 5.2 Copies
-- Assigning (`var b = a;`), passing (`f(a)`), storing (`h.item = a;`), and binding a loop
+- Assigning (`var b = a;`), passing (`f(a)`), storing (`State(todos=xs)`), and binding a loop
   variable (`for _, t in xs`) each give the receiver an independent value.
-- This is a **semantic** rule. In memory, copies share storage and only the parts that change
-  are copied, when they change.
-- A value returned from a function is a concrete value, never a reference. The caller
-  receives it as an immutable value, even when it binds the result to a `mut` variable:
-  ```solr
-  mut s = State(todos=[]);
-  s = update(s, msg);               // rebinding. Not a mutation.
-  s.todos.push(todo);               // a mutation, in place
-  ```
-- Since there is no shared mutable state, a value passed to another function (or another
-  concurrent actor) is a snapshot. Later changes by the sender don't reach it.
+- This is a **semantic** rule. Values never change, so in memory they can share storage. The
+  compiler can also make a new value in place of an old one when nothing else refers to the
+  old one. That is an optimization, and it does not change what a program means.
+- A value passed to another function (or another concurrent actor) is a snapshot. A later
+  rebind by the sender does not reach it.
 
-### 5.3 The copy operator `@`
-`@x` makes a copy of `x` that the current function can change.
+### 5.3 Updated values
+To "change" a value, make a new value and rebind the name:
 ```solr
 fn rename(todo: Todo, title: str) -> Todo {
-    mut mine = @todo;             // a mutable copy, local to this function
-    mine.title = title;
-    return mine;                  // the caller receives an immutable value
+    return todo.with(title=title);              // or: Todo(...todo, title=title)
+}
+
+fn bump(s: State) -> State {
+    var next = s.with(count=s.count + 1);
+    next = next.with(user=next.user.with(name="tommy"));   // a nested update
+    return next;
+}
+
+fn grow(xs: []int) -> []int {
+    var out = xs.append(4);
+    out = out.replace(0, 9);
+    return [...out, 5];
 }
 ```
-- `@x` is valid **only as the initializer of a binding**: `mut t = @x;` or `var t = @x;`.
-- `mut t = x;` (no `@`) is an error. A mutable binding must show where the copy is made.
-  `var t = @x;` is allowed, though it has no use.
-- A `mut` initializer must be a **fresh value**: `@x`, a literal, a sequence literal, a
-  call or construction, `Ok`/`Err`/`Some`/`None`, an operator expression, or a function
-  literal. `if`, `switch`, and blocks are fresh when every branch is. `try e` and `must e`
-  are fresh when `e` is. A variable, a field (`a.b`), an element (`a[i]`), and a **slice**
-  (`xs[a:b]`) are not fresh, so `mut t = xs[a:b];` is an error. Write `mut t = @xs[a:b];`.
-  `var t = xs[a:b];` is fine.
-- There is no implicit form such as `@todo.name = name`.
-- The same function can be written without `mut`:
-  `return todo.with(title=title);`
+- `x.with(field=value, ...)` returns a copy of a struct or enum variant with the fields
+  replaced (§10.3). A spread in a construction does the same (§3.4) **[provisional]**.
+- Slices are updated with `append`, `prepend`, `replace` (§10.2), and spreads.
+- `s.f = v` and `xs[i] = v` are errors. They may become short forms of the rebinds above
+  later **[open]**.
 
 ### 5.4 Closures
 A function expression is its own scope. It reads its parent's variables through a **copy taken
-when the closure is created**. It can't change or rebind a parent's variable, whether the
-parent declared it `var` or `mut`. This keeps a closure that outlives its parent safe.
+when the closure is created**. It cannot rebind a parent's variable. This keeps a closure that
+outlives its parent safe.
 ```solr
 fn counterAdder(base: int) -> fn(int) -> int {
     return fn(n: int) -> int: base + n;     // reads a copy of `base`
 }
 ```
-Inside a closure, its own `mut` variables work as usual.
+Inside a closure, its own variables can be rebound as usual.
 
-### 5.5 Methods and mutation
+### 5.5 Methods
 A method receives `self` as an immutable value. `todo.complete()` can only return a new
-`Todo`. Built-in operations come in two kinds (§10.2): ones that return a new value
-(`append`, `with`), and in-place ones that need a `mut` receiver (`push`).
+`Todo`. The built-in methods also return new values (§10.2). Thus a method call never changes
+a variable: `xs.append(4);` alone has no effect. Write `xs = xs.append(4);`.
 
 ### 5.6 Compile errors, in summary
 ```solr
+var limit = 10;
+
 fn main() {
     var first = Todo(id=1, title="a", status=Status.Open);
-    var second = first;               // a copy
-    second.title = "b";               // error: `second` is not mutable; declare it with `mut`
+    first.title = "b";                // error: a field cannot be assigned; use `with`
+    var xs = [1, 2];
+    xs[0] = 3;                        // error: an element cannot be assigned; use `replace`
+    xs = xs.replace(0, 3);            // ok: rebinding
+    limit = 20;                       // error: a constant cannot be rebound
 
-    mut third = first;                // error: use `@` to make a mutable copy
-    mut part = xs[1:3];               // error: a slice isn't a fresh value either
-    mut fourth = @first;              // ok
-    fourth.title = "c";               // ok, changes only `fourth`
-
-    var h = fn() { fourth.title = "y"; };   // error: a closure can't change a parent variable
+    var h = fn() { xs = []; };        // error: a closure cannot rebind a parent variable
 }
 
-fn f(t: Todo) { t.title = "x"; }      // error: parameters are immutable
-fn g(t: mut Todo) { }                 // error: there are no mutable parameters
+fn f(t: Todo) { t = t.with(title="x"); }   // error: a parameter cannot be rebound
 ```
 
 ### 5.7 Costs
-- Mutation can't cross a function call. A helper that "changes" something returns the new value,
-  and the caller rebinds or destructures: `s = update(s, msg);`.
+- A function cannot change its caller's values. A helper that "changes" something returns the
+  new value, and the caller rebinds: `s = update(s, msg);`.
 - Shared mutable resources (a database connection, a cache) can't be values. They need a
   context parameter or a dedicated actor (§12). Package-level handles are not possible, because
   package-level values are compile-time constants (§4.6).
@@ -510,7 +532,7 @@ From loosest to tightest binding. Binary operators associate to the left.
 | 4 | `<` `<=` `>` `>=` |
 | 5 | `+` `-` |
 | 6 | `*` `/` `%` |
-| 7 | prefix `-` `!` `@` `try` `must` |
+| 7 | prefix `-` `!` `try` `must` |
 | 8 | call `f(x)`, index `a[i]`, slice `a[i:j]`, member `a.b` |
 
 `try` and `must` are prefix operators at the same level as unary `-`. So `try f() + 1` is
@@ -540,7 +562,7 @@ conversion (§9.3).
 Calling a function stored in a field is written the same way as calling a method **[open]**.
 
 ### 6.5 Unary operators
-`-x` negates an `int` or `float`. `!b` negates a `bool`. `@x` is the copy operator (§5.3).
+`-x` negates an `int` or `float`. `!b` negates a `bool`.
 
 ### 6.6 Binary operators
 Typing rules are in §9.
@@ -549,7 +571,7 @@ Typing rules are in §9.
 - `xs[i]` reads an element. An out-of-range index **panics**. `xs.get(i)` returns `T!`.
 - `xs[a:b]`, `xs[:b]`, `xs[a:]` take a sub-sequence, and also work on `str`.
   The result is a value, as always. An implementation may share storage with the original.
-  A slice can initialize a `var`, but not a `mut` (§5.3).
+- An element cannot be assigned: `xs[i] = v;` is an error. Use `xs.replace(i, v)` (§10.2).
 - Indexing a `str` gives a one-character `str`.
 
 ### 6.8 Blocks and yield
@@ -650,8 +672,8 @@ for { if done { break; } }                               // loop until `break`
 - Like a function's parameters, the loop bindings and the top level of the loop body are one
   scope, so `for _, x in xs { var x = 1; }` is a redeclaration. The same holds for the error
   binding of `try … else |err| { }` (§8.3).
-- Iterating over a `mut` variable iterates over a copy taken at the start of the loop, so
-  changing the variable in the body doesn't affect the iteration.
+- The loop iterates over the value that the expression has when the loop starts. Rebinding
+  that variable in the body does not change the iteration.
 - A `for` used as a value collects each `>>` in its body into a slice (a comprehension):
   ```solr
   var ids = for _, t in todos { >> t.id; };
@@ -692,16 +714,15 @@ Line breaks have no meaning.
 ### 7.2 Statement forms
 | Statement | Form |
 |---|---|
-| Immutable binding | `var name [: Type] = expr;` |
-| Mutable binding | `mut name [: Type] = expr;` |
-| Assignment | `target = expr;` and `target op= expr;` for `+ - * / %` |
+| Binding | `var name [: Type] = expr;` |
+| Assignment (rebinding) | `name = expr;` and `name op= expr;` for `+ - * / %` |
 | Return | `return;` or `return expr;` |
 | Yield | `>> expr;` |
 | Break, continue | `break;` `continue;` |
 | Expression | `expr;` (a call, `if`, `for`, `switch`, a block, or `try`/`must` of a call) |
 
-An assignment target is a variable, a field, or an element. Assigning to the variable itself
-rebinds it. Assigning to a field or element changes contents and needs `mut` (§5.1).
+An assignment target is a variable declared in the current function (§5.1). `x op= e` means
+`x = x op e`. A field (`s.f = v`) or an element (`xs[i] = v`) is not a valid target.
 
 **Unreachable code is an error.** A statement that never falls through to the next one ends
 its block, and any statement after it in the same block is reported as unreachable:
@@ -846,26 +867,20 @@ All of it is **[provisional]**.
 | `Error(msg)` | creates an error (§8.1) |
 
 ### 10.2 Slice and string methods
-**Return a new value** (work on any binding):
+Every method returns a new value. No method changes its receiver.
 
 | Method | Meaning |
 |---|---|
 | `xs.append(x)` | new slice with `x` added at the end |
 | `xs.prepend(x)` | new slice with `x` added at the front |
+| `xs.replace(i, x)` | new slice with element `i` replaced by `x`. An out-of-range index panics. |
 | `xs.get(i)` | `T!`, the element, or an error if out of range |
 | `xs.contains(x)` | `bool` |
 | `xs.find(f)` | `T!` the first element for which `f` is true **[open]** |
 | `s.get(i)` | `str!` for a `str` |
 
-**Change in place** (need a `mut` receiver):
-
-| Method | Meaning |
-|---|---|
-| `xs.push(x)` | add `x` to the end |
-| `xs[i] = x` | replace an element |
-| `xs.sort()` | sort |
-
-`pop` on a `mut` slice (in place, or returning a pair) is **[open]**.
+Sorting is **[not implemented]**. It will probably take a comparison function
+`fn(a: T, b: T) -> int`. Removing an element (`pop`) is **[open]**.
 
 ### 10.3 Structs
 `x.with(field=value, ...)` returns a copy with the fields replaced. It is built in for every
@@ -892,7 +907,7 @@ contents are **[open]**.
 **[open]**. The direction:
 - Concurrency is done with **actors**, declared with `actor fn` **[provisional]**.
 - Everything an actor receives is an immutable value, so there are no data races. An actor that
-  wants to change a value copies it, then returns its copy or sends a message.
+  wants a changed value makes a new one, then returns it or sends a message.
 - Shared mutable state does not exist. State that has to be shared is owned by one actor, and
   others send it messages.
 - How an actor is started, how it is called, and how results come back are not decided.
@@ -914,15 +929,15 @@ varDecl      = 'var' ident [ ':' type ] '=' expr ';' ;
 fnDecl       = 'fn' ident [ typeParams ] '(' list(param) ')' [ '->' type ] ( block | ':' expr ';' ) ;
 param        = ident ':' type | 'self' ;      (* `self` only first, in a method or interface *)
 typeParams   = '[' list(ident [ ':' type ]) ']' ;
-implDecl     = 'impl' type '{' { [ 'pub' ] fnDecl } '}' ;
+implDecl     = 'impl' ident '{' { [ 'pub' ] fnDecl } '}' ;
 
-typeDecl     = 'type' ident [ typeParams ] ( '=' type ';'
+typeDecl     = 'type' ident ( '=' type ';'
                                            | 'struct' '{' list(field) '}'
                                            | 'enum' '{' list(variant) '}'
                                            | 'interface' '{' { 'fn' sig } '}' ) ;
 field        = [ 'pub' ] ident ':' type ;
 variant      = ident [ '(' list(field) ')' ] ;
-sig          = ident [ typeParams ] '(' list(param) ')' [ '->' type ] ;
+sig          = ident '(' list(param) ')' [ '->' type ] ;
 
 type         = typeAtom [ '!' | '?' ] ;
 typeAtom     = ident { '.' ident } [ '[' list(type) ']' ]
@@ -931,8 +946,7 @@ typeAtom     = ident { '.' ident } [ '[' list(type) ']' ]
 
 block        = '{' { stmt } '}' ;
 stmt         = 'var' ident [ ':' type ] '=' expr ';'
-             | 'mut' ident [ ':' type ] '=' expr ';'
-             | expr assignOp expr ';'
+             | ident assignOp expr ';'
              | 'return' [ expr ] ';'
              | '>>' [ expr ] ';'
              | 'break' ';' | 'continue' ';'
@@ -941,7 +955,7 @@ assignOp     = '=' | '+=' | '-=' | '*=' | '/=' | '%=' ;
 
 expr         = prefix { infix } ;
 prefix       = literal | ident | '(' expr ')' | '[' list(expr | '...' expr) ']'
-             | '-' expr | '!' expr | '@' expr
+             | '-' expr | '!' expr
              | 'try' expr [ 'else' [ '|' ident '|' ] ( block | expr ) ]
              | 'must' expr
              | 'Ok' '(' [ expr ] ')' | ( 'Err' | 'Some' ) '(' expr ')' | 'None' '(' ')'
@@ -968,12 +982,10 @@ parser differ from the grammar in the ways listed in §15.
 
 ## 14. Example programs
 
-The examples are checked: each one parses as written with the current parser. The one exception
-is the block in §5.6, which shows programs that are rejected. All of it parses except
-`fn g(t: mut Todo)`, which the parser rejects (there are no `mut` parameter types). The checker
-reports the other errors in that block.
+The examples are checked: each one parses as written with the current parser. The block in
+§5.6 shows programs that are rejected. It parses, and the checker reports its errors.
 
-### 14.1 Values and mutability
+### 14.1 Values and rebinding
 ```solr
 type Status enum { Open, Done }
 
@@ -993,21 +1005,17 @@ fn add(s: State, title: str) -> State {
     return s.with(todos=s.todos.append(todo));
 }
 
-// `done` is changed in place. The change is local to this function.
+// `done` is rebound in the loop. No value is changed.
 fn completeAll(s: State) -> State {
-    mut done: []Todo = [];
+    var done: []Todo = [];
     for _, t in s.todos {
-        done.push(t.with(status=Status.Done));
+        done = done.append(t.with(status=Status.Done));
     }
     return s.with(todos=done);
 }
 
-// Copy, change, return.
-fn rename(t: Todo, title: str) -> Todo {
-    mut mine = @t;
-    mine.title = title;
-    return mine;
-}
+// A new value with one field replaced.
+fn rename(t: Todo, title: str) -> Todo: t.with(title=title);
 
 fn main() {
     var s = State(todos=[]);
@@ -1042,7 +1050,7 @@ impl Circle {
 
 // Accepts anything that has an `area` method.
 fn total(shapes: []Shape) -> float {
-    mut sum = 0.0;
+    var sum = 0.0;
     for _, s in shapes {
         sum += s.area();
     }
@@ -1114,9 +1122,9 @@ fn makeAdder(base: int) -> fn(int) -> int {
 }
 
 fn map[A, B](xs: []A, f: fn(A) -> B) -> []B {
-    mut out: []B = [];
+    var out: []B = [];
     for _, x in xs {
-        out.push(f(x));
+        out = out.append(f(x));
     }
     return out;
 }
@@ -1140,8 +1148,8 @@ type Token struct {
 fn isDigit(ch: str) -> bool: ch >= "0" and ch <= "9";
 
 fn lex(input: str) -> []Token {
-    mut tokens: []Token = [];
-    mut pos = 0;
+    var tokens: []Token = [];
+    var pos = 0;
     for pos < len(input) {
         var ch = input[pos];
         if ch == " " {
@@ -1153,7 +1161,7 @@ fn lex(input: str) -> []Token {
             for pos < len(input) and isDigit(input[pos]) {
                 pos += 1;
             }
-            tokens.push(Token(kind=Kind.Int, lit=input[start:pos]));
+            tokens = tokens.append(Token(kind=Kind.Int, lit=input[start:pos]));
             continue;
         }
         var tok = switch ch {
@@ -1161,15 +1169,15 @@ fn lex(input: str) -> []Token {
             "-" => Token(kind=Kind.Minus, lit=ch),
             _ => Token(kind=Kind.Illegal, lit=ch)
         };
-        tokens.push(tok);
+        tokens = tokens.append(tok);
         pos += 1;
     }
-    tokens.push(Token(kind=Kind.Eof, lit=""));
-    return tokens;
+    return tokens.append(Token(kind=Kind.Eof, lit=""));
 }
 ```
 Every helper that would need to change the lexer's position would instead have to return it.
-This version keeps the whole loop in one function, so `tokens` and `pos` are `mut` locals.
+This version keeps the whole loop in one function, so `tokens` and `pos` are local variables
+that the loop rebinds.
 
 ---
 
@@ -1186,7 +1194,8 @@ As of 2026-10-28 they implement everything in this document except the items bel
 | Other integer bases, `_` in numbers, `'` characters, non-ASCII source | See §17. |
 | `actor fn` | `actor` is an ordinary identifier. There is no keyword and no parse rule. |
 | `is` in `switch` arms | **[open]** as a feature. |
-| Type-parameter constraints (`S: Iterable[T]`) | `TypeParameter` has no constraint field, so `[T, S: X]` is a parse error. |
+| Type-parameter bounds (`[T: Comparable]`) | `TypeParameter` has no bound field, so `[T: X]` is a parse error. |
+| `Self` | The parser reads `Self` as an ordinary type name. The checker doesn't resolve it yet. |
 
 **The parser accepts more than the grammar, or parses it differently.** The checker, or a later
 parser change, must reject or fix these:
@@ -1198,16 +1207,20 @@ parser change, must reject or fix these:
 | `fn f();` | a function with no body is accepted | a body is required (§4.2) |
 | `fn f(x) {}` | a parameter with no type is accepted | types are required (§4.2) |
 | `pub impl A {}`, `pub import a;`, `pub var x = 1;` inside a function | accepted | `pub` applies to `fn`, `type`, and top-level `var` (§11) |
+| `type Pair[A, B] struct {}`, `type I interface { fn f[T]() }`, `impl Pair[A, B] {}` | type parameters and type arguments are accepted | only functions and methods can be generic (§3.8) |
+| `s.f = v;`, `xs[i] = v;` | any expression is accepted as an assignment target | only a variable (§7.2) |
 | `1 + 2;` as a statement | accepted | expression statements are calls, `if`, `for`, `switch`, blocks, and `try`/`must` of a call (§7.2) |
 
 **Enforced by the checker, not the parser.** The rules in this document that are written as an
-error: types and conversions, mutability, `@x` only as a binding initializer, `mut x = y` without
-`@`, `_` last in a `switch`, enum coverage, the `PascalCase` convention, and so on. A top-level
-`mut` is rejected by the parser, with a generic "unexpected token" message.
+error: types and conversions, rebinding (§5.1), field and element assignment, `_` last in a
+`switch`, enum coverage, the `PascalCase` convention, and so on.
 
-**Changes in the current lexer and parser, for reference:** `mut` declarations; `T?`; `Some` and
-`None`; `...` in sequence literals and call arguments; `!=` after a type read as `!` then `=`;
-`@x` as the copy operator (`CopyExpr`); `mut` as a parameter type removed; `try` at the unary
+**Removed from the language, still in the lexer or parser:** `mut` declarations and the `@`
+copy operator (`CopyExpr`) were removed on 2026-11-10 (§5). Until the lexer and parser drop
+them, the checker rejects them.
+
+**Changes in the current lexer and parser, for reference:** `T?`; `Some` and `None`; `...` in
+sequence literals and call arguments; `!=` after a type read as `!` then `=`; `try` at the unary
 level; expression-bodied `impl` methods ending in `;`; string escapes decoded in the lexer, with
 lexer errors reported separately from parse errors.
 
@@ -1217,14 +1230,17 @@ lexer errors reported separately from parse errors.
 
 Consolidated from the markers above.
 
-**Values and mutability**
+**Values and bindings**
 - Do omitted struct fields follow §3.4? Will per-field defaults be added?
+- Field and element assignment as short forms of a rebind: `s.f = v` for `s = s.with(f=v)`,
+  and `xs[i] = v` for `xs = xs.replace(i, v)` (§5.3).
+- Sorting with a comparison function, and `pop` (§10.2).
 - A `ref` type for shared mutable state, if ever.
 
 **Types**
 - Tuple syntax, element access, destructuring.
 - `Maybe` vs `Result`: which absences are which?
-- Constraint syntax for generics.
+- Several bounds on one type parameter (§3.8).
 - Built-in interfaces: `Comparable` for `==` and ordering on structs and enums (§9.1), and
   how built-in interfaces are declared (in the universe scope, like `print`).
 - Is a struct that contains itself directly (`type N struct { next: N }`, with no `?` or slice

@@ -238,7 +238,7 @@ fn punctuation(n: int) -> int {
 
 // `break` aimed at a loop outside the switch makes the arm diverge
 fn breakOutside(cmds: []str) -> int {
-    mut count = 0;
+    var count = 0;
     for _, cmd in cmds {
         var n = switch cmd {
             "quit" => { break; }

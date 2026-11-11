@@ -736,6 +736,9 @@ func (p *Parser) parseFunctionSignature(isExpr bool) *ast.FunctionSignature {
 		n.Token = p.recall(1)
 	}
 	if p.check(lexer.LBRACK) {
+		if isExpr {
+			p.error(n.Token, "function literals cannot be generic")
+		}
 		p.advance()
 		n.TypeParams = parseList(p, brackList, p.parseTypeParam)
 	}
@@ -817,7 +820,11 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStmt {
 
 func (p *Parser) parseTypeParam() *ast.TypeParameter {
 	tok := p.expect(lexer.IDENT)
-	return &ast.TypeParameter{Token: tok}
+	n := &ast.TypeParameter{Token: tok}
+	if p.accept(lexer.COLON) {
+		n.Bound = p.parseType()
+	}
+	return n
 }
 
 func (p *Parser) parseImplDeclStmt() ast.Statement {
@@ -835,27 +842,20 @@ func (p *Parser) parseImplDeclStmt() ast.Statement {
 func (p *Parser) parseTypeDecl(pub bool) ast.Statement {
 	tok := p.expect(lexer.TYPE)
 	ident := p.expect(lexer.IDENT)
-	var parameters []*ast.TypeParameter
-	if p.check(lexer.LBRACK) {
-		p.advance()
-		parameters = parseList(p, brackList, p.parseTypeParam)
-	}
 	if p.check(lexer.ASSIGN) {
 		n := &ast.TypeAliasStmt{
-			Token:      tok,
-			Name:       ident.Literal,
-			IsPublic:   pub,
-			TypeParams: parameters,
+			Token:    tok,
+			Name:     ident.Literal,
+			IsPublic: pub,
 		}
 		p.advance()
 		n.Value = p.parseType()
 		return n
 	} else {
 		n := &ast.TypeDeclStmt{
-			Token:      tok,
-			Name:       ident.Literal,
-			IsPublic:   pub,
-			TypeParams: parameters,
+			Token:    tok,
+			Name:     ident.Literal,
+			IsPublic: pub,
 		}
 		switch p.cur().Type {
 		case lexer.STRUCT:

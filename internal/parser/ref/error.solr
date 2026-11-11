@@ -18,3 +18,10 @@ fn main() {
 // fn f(() {}
 
 fn f( x; var y = 1; }
+
+type Pair[A, B] struct {            // ERR: only functions and methods can be generic
+    a: A,
+    b: B
+}
+
+type List[T] = []T;                 // ERR: only functions and methods can be generic
