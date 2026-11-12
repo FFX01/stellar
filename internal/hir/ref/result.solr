@@ -1,0 +1,19 @@
+fn result(a: int) -> int! {
+    if a < 10 {
+        return Ok(a);
+    } else {
+        return Err("oops");
+    }
+}
+
+fn namedResult() -> Result[int] {
+    return Ok(1);
+}
+
+fn maybe() -> int? {
+    return Some(1);
+}
+
+fn namedMaybe() -> Maybe[int] {
+    return Some(1);
+}

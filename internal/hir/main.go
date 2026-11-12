@@ -7,6 +7,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strings"
 
 	"stellar/internal/ast"
 	"stellar/internal/errors"
@@ -171,6 +172,30 @@ func (et *EnumT) GetMethod(n string) (*FunctionT, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
+type MaybeT struct {
+	ElemType Type
+}
+
+func (mt *MaybeT) typ()                      {}
+func (mt *MaybeT) GetState() ResolutionState { return Resolved }
+func (mt *MaybeT) getName() string {
+	return "Maybe"
+}
+func (mt *MaybeT) GetMethod(n string) (*FunctionT, error) {
+	return nil, fmt.Errorf("`Maybe` has no method `%s`", n)
+}
+
+type ResultT struct {
+	ElemType Type
+}
+
+func (rt *ResultT) typ()                      {}
+func (rt *ResultT) GetState() ResolutionState { return Resolved }
+func (rt *ResultT) getName() string           { return "Result" }
+func (rt *ResultT) GetMethod(n string) (*FunctionT, error) {
+	return nil, fmt.Errorf("`Result` has no method `%s`", n)
+}
+
 type SliceT struct {
 	ElementType Type
 }
@@ -184,6 +209,8 @@ func (st *SliceT) GetMethod(name string) (*FunctionT, error) {
 		return st.genAppend(), nil
 	case "replace":
 		return st.genReplace(), nil
+	case "get":
+		return st.genGet(), nil
 	default:
 		return nil, fmt.Errorf("slice type has no method `%s`", name)
 	}
@@ -198,6 +225,20 @@ func (st *SliceT) genAppend() *FunctionT {
 		Params: []FParam{
 			{Name: "self", Type: SelfT},
 			{Name: "elem", Type: st.ElementType},
+		},
+	}
+}
+func (st *SliceT) genGet() *FunctionT {
+	elemT := &TypeParamT{Name: "T"}
+	return &FunctionT{
+		Name:       "get",
+		Layer:      Builtin,
+		ReturnType: &MaybeT{ElemType: elemT},
+		RState:     Resolved,
+		TypeParams: []*TypeParamT{elemT},
+		Params: []FParam{
+			{Name: "self", Type: SelfT},
+			{Name: "idx", Type: IntT},
 		},
 	}
 }
@@ -248,7 +289,9 @@ func (st *StructT) GetMethod(n string) (*FunctionT, error) {
 	if m, ok := st.Methods[n]; ok {
 		return m, nil
 	}
-	return nil, fmt.Errorf("not implemented")
+	return nil, fmt.Errorf("`%s` has no method `%s`",
+		st.Name, n,
+	)
 }
 
 type PrimitiveType struct {
@@ -259,7 +302,32 @@ func (pt *PrimitiveType) typ()                      {}
 func (pt *PrimitiveType) GetState() ResolutionState { return Resolved }
 func (pt *PrimitiveType) getName() string           { return pt.Name }
 func (pt *PrimitiveType) GetMethod(name string) (*FunctionT, error) {
+	switch name {
+	case "string":
+		ft := &FunctionT{
+			Name:       fmt.Sprintf("%s.%s", pt.Name, "string"),
+			ReturnType: StrT,
+			RState:     Resolved,
+			Layer:      Builtin,
+			Params: []FParam{
+				{Name: "self", Type: SelfT},
+			},
+		}
+		return ft, nil
+	}
 	return nil, fmt.Errorf("not implemented")
+}
+
+var stringableMap = map[string]*FunctionT{
+	"str": {
+		Name:       "str.string",
+		RState:     Resolved,
+		ReturnType: StrT,
+		Layer:      Builtin,
+		Params: []FParam{
+			{Name: "self", Type: SelfT},
+		},
+	},
 }
 
 var (
@@ -352,7 +420,7 @@ func (tpt *TypeParamT) GetState() ResolutionState { return Resolved }
 func (tpt *TypeParamT) getName() string           { return tpt.Name }
 func (tpt *TypeParamT) GetMethod(n string) (*FunctionT, error) {
 	if tpt.Bound == nil {
-		return nil, fmt.Errorf("`%s` is unresolved")
+		return nil, fmt.Errorf("`%s` has no method `%s`", tpt.Name, n)
 	}
 	return tpt.Bound.GetMethod(n)
 }
@@ -377,7 +445,20 @@ type FunctionT struct {
 
 func (ft *FunctionT) typ()                      {}
 func (ft *FunctionT) GetState() ResolutionState { return ft.RState }
-func (ft *FunctionT) getName() string           { return ft.Name }
+func (ft *FunctionT) getName() string {
+	if ft.Name != "" {
+		return ft.Name
+	}
+	var ptypes []string
+	for _, p := range ft.Params {
+		ptypes = append(ptypes, p.Type.getName())
+	}
+	return fmt.Sprintf(
+		"fn(%s) -> %s",
+		strings.Join(ptypes, ", "),
+		ft.ReturnType.getName(),
+	)
+}
 func (ft *FunctionT) GetMethod(n string) (*FunctionT, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -393,6 +474,36 @@ var (
 	InvalidV = &InvalidValue{}
 	VoidV    = &VoidValue{}
 )
+
+type TryV struct {
+	Node  *ast.TryExpr
+	Value Value // must be Result or Maybe
+	Err   *CaseBinding
+	Else  *Block
+	Type  Type
+}
+
+func (tv *TryV) val()          {}
+func (tv *TryV) GetType() Type { return tv.Type }
+
+type WrapperKind int
+
+const (
+	WrapOk WrapperKind = iota
+	WrapErr
+	WrapSome
+	WrapNone
+)
+
+type WrapperV struct {
+	Node  ast.Expression
+	Kind  WrapperKind
+	Value Value
+	Type  Type
+}
+
+func (wv *WrapperV) val()          {}
+func (wv *WrapperV) GetType() Type { return wv.Type }
 
 type SliceRange struct {
 	Node     *ast.SliceExpr
@@ -495,6 +606,14 @@ type MethodV struct {
 func (mv *MethodV) val()          {}
 func (mv *MethodV) GetType() Type { return mv.Type }
 
+type FunctionLit struct {
+	Node *ast.FunctionExpr
+	Body *FunctionBody
+}
+
+func (fl *FunctionLit) val()          {}
+func (fl *FunctionLit) GetType() Type { return fl.Body.Type }
+
 type FunctionV struct {
 	Name string
 	Type *FunctionT
@@ -513,7 +632,9 @@ func (a *FunctionCallArgument) GetType() Type { return a.Value.GetType() }
 
 type FunctionCall struct {
 	Node     *ast.CallExpr
+	Receiver Value
 	Callee   *FunctionT
+	CalleeV  Value
 	Args     []FunctionCallArgument
 	TypeArgs []Type
 	Type     Type
@@ -772,8 +893,19 @@ func (a *Analyzer) Dump() {
 	litter.Dump(a.Universe)
 	litter.Dump(a.functionBodies)
 	if len(a.Errors) > 0 {
+		sorted := slices.Clone(a.Errors)
+		slices.SortFunc(sorted, func(a, b errors.Error) int {
+			aLine, bLine := a.Position.Line, b.Position.Line
+			if aLine < bLine {
+				return -1
+			} else if bLine < aLine {
+				return 1
+			} else {
+				return 0
+			}
+		})
 		fmt.Println("--- Errors ---")
-		for _, e := range a.Errors {
+		for _, e := range sorted {
 			fmt.Println(e.String())
 		}
 	}
@@ -800,7 +932,6 @@ func newUniverse() *Scope {
 		"print":      PrintT,
 		"len":        LenT,
 		"Stringable": StringableI,
-		"Self":       SelfT,
 	}
 	u.Values = map[string]Value{
 		"print": PrintV,
@@ -880,9 +1011,13 @@ func (a *Analyzer) pass1(prog *ast.Program) {
 	}
 }
 
-func (a *Analyzer) resolveFunctionParam(t *FunctionT, p *ast.Parameter) {
+func (a *Analyzer) resolveFunctionParam(t *FunctionT, p *ast.Parameter, selfT Type) {
 	if p.Name == "self" {
-		fp := FParam{Node: p, Name: p.Name, Type: SelfT}
+		if selfT == nil {
+			a.errorF(p, "`self` is only valid in a method or interface method signature")
+			return
+		}
+		fp := FParam{Node: p, Name: p.Name, Type: selfT}
 		t.Params = append(t.Params, fp)
 		return
 	}
@@ -935,9 +1070,51 @@ func (a *Analyzer) resolveFunctionT(t *FunctionT) {
 	rt := a.resolveType(stmt.Signature.ReturnType)
 	t.ReturnType = rt
 	for _, p := range stmt.Signature.Parameters {
-		a.resolveFunctionParam(t, p)
+		a.resolveFunctionParam(t, p, nil)
 	}
 	t.RState = Resolved
+}
+
+func (a *Analyzer) resolveFunctionTypeType(node *ast.FunctionType) Type {
+	ft := &FunctionT{RState: Resolved, Layer: User}
+	for _, p := range node.Parameters {
+		pt := a.resolveType(p.Type)
+		if pt == VoidT {
+			a.errorF(p, "`void` is not a valid parameter type")
+			pt = InvalidT
+		}
+		ft.Params = append(ft.Params, FParam{Node: p, Name: p.Name, Type: pt})
+	}
+	ft.ReturnType = a.resolveType(node.ReturnType)
+	return ft
+}
+
+func (a *Analyzer) resolveNamedType(node *ast.NamedType) Type {
+	switch node.Name {
+	case "Result":
+		rt := &ResultT{ElemType: VoidT}
+		if len(node.Args) > 0 {
+			rt.ElemType = a.resolveType(node.Args[0])
+		}
+		if len(node.Args) > 1 {
+			a.errorF(node, "result can only contain a single value")
+			return InvalidT
+		}
+		return rt
+	case "Maybe":
+		if len(node.Args) != 1 {
+			a.errorF(node, "`Maybe` requires exactly one type arg")
+			return InvalidT
+		}
+		return &MaybeT{ElemType: a.resolveType(node.Args[0])}
+	default:
+		rt, err := a.CurrentScope.lookupType(node.Name)
+		if err != nil {
+			a.addError(node, err)
+			return InvalidT
+		}
+		return rt
+	}
 }
 
 func (a *Analyzer) resolveType(node ast.Type) Type {
@@ -945,16 +1122,20 @@ func (a *Analyzer) resolveType(node ast.Type) Type {
 	case nil:
 		return VoidT
 	case *ast.NamedType:
-		tname := t.Name
-		rt, err := a.CurrentScope.lookupType(tname)
-		if err != nil {
-			a.addError(t, err)
-			return InvalidT
-		}
-		return rt
+		return a.resolveNamedType(t)
 	case *ast.SliceType:
 		rt := &SliceT{}
 		rt.ElementType = a.resolveType(t.ElementType)
+		return rt
+	case *ast.FunctionType:
+		return a.resolveFunctionTypeType(t)
+	case *ast.ResultType:
+		rt := &ResultT{}
+		rt.ElemType = a.resolveType(t.Value)
+		return rt
+	case *ast.MaybeType:
+		rt := &MaybeT{}
+		rt.ElemType = a.resolveType(t.Value)
 		return rt
 	default:
 		return InvalidT
@@ -1033,6 +1214,9 @@ func (a *Analyzer) resolveInterfaceT(t *InterfaceT) {
 			continue
 		}
 
+		a.enterScope("[iface]")
+		a.CurrentScope.declareType("Self", SelfT)
+
 		fname := fmt.Sprintf("%s.%s", t.Name, meth.Name)
 		ft := &FunctionT{
 			Node: meth, Name: fname, RState: Resolved,
@@ -1041,10 +1225,11 @@ func (a *Analyzer) resolveInterfaceT(t *InterfaceT) {
 		ft.ReturnType = a.resolveType(meth.ReturnType)
 
 		for _, p := range meth.Parameters {
-			a.resolveFunctionParam(ft, p)
+			a.resolveFunctionParam(ft, p, SelfT)
 		}
+		a.exitScope()
 
-		t.Methods[ft.Name] = ft
+		t.Methods[meth.Name] = ft
 	}
 }
 
@@ -1376,21 +1561,19 @@ func (a *Analyzer) resolveFunctionBodyExpr(fb *FunctionBody, expr ast.Expression
 	fb.Body.Statements = append(fb.Body.Statements, rs)
 }
 
-func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
-	a.enterScope(t.Name)
+func (a *Analyzer) resolveBody(
+	ft *FunctionT, body ast.Expression,
+) *FunctionBody {
+	a.enterScope(ft.Name)
 	defer a.exitScope()
 
-	for _, tp := range t.TypeParams {
+	for _, tp := range ft.TypeParams {
 		a.CurrentScope.declareType(tp.Name, tp)
 	}
 
-	stmt, ok := t.Node.(*ast.FunctionStmt)
-	if !ok {
-		a.errorF(stmt, "function expressions not yet supported")
-	}
-	fb := &FunctionBody{Node: stmt.Body, Type: t, Body: &Block{Type: VoidT}}
+	fb := &FunctionBody{Node: body, Type: ft, Body: &Block{Type: VoidT}}
 
-	for idx, p := range t.Params {
+	for idx, p := range ft.Params {
 		pv := &FunctionParamVar{Node: p.Node, Name: p.Name, Index: idx, Type: p.Type}
 		fb.ParamVars = append(fb.ParamVars, pv)
 		if err := a.CurrentScope.declareValue(pv.Name, pv); err != nil {
@@ -1398,21 +1581,32 @@ func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
 		}
 	}
 
-	var isExprBody bool
-	switch t := stmt.Body.(type) {
+	switch t := body.(type) {
 	case *ast.BlockExpr:
 		a.resolveStmts(fb, fb.Body, t.Statements)
+		if ft.ReturnType != VoidT && !terminates(fb.Body) {
+			a.errorF(body, "function `%s` must return `%s` on every path",
+				ft.getName(), ft.ReturnType.getName())
+		}
 	default:
 		a.resolveFunctionBodyExpr(fb, t)
-		isExprBody = true
 	}
 
+	return fb
+}
+
+func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
+	stmt, ok := t.Node.(*ast.FunctionStmt)
+	if !ok {
+		panic(
+			fmt.Sprintf(
+				"internal error: `%s` in package scope has no FunctionStmt", t.Name,
+			),
+		)
+	}
+
+	fb := a.resolveBody(t, stmt.Body)
 	a.storeFunctionBody("", fb)
-
-	if !isExprBody && t.ReturnType != VoidT && !terminates(fb.Body) {
-		a.errorF(stmt, "function `%s` must return `%s` on every path", t.Name,
-			t.ReturnType.getName())
-	}
 }
 
 func terminates(b *Block) bool {
@@ -1596,18 +1790,21 @@ func (a *Analyzer) resolveImplDecl(node *ast.ImplDeclStmt) {
 		}
 
 		a.enterScope("[sig]")
+		a.CurrentScope.declareType("Self", targetT)
 
 		a.resolveTypeParams(ft, meth.Signature.TypeParams)
 
 		ft.ReturnType = a.resolveType(meth.Signature.ReturnType)
 
 		if len(meth.Signature.Parameters) < 1 {
-			a.errorF(meth, "all methods must take at least argument `self`")
+			a.errorF(meth, "all methods must take argument `self`")
+			a.exitScope()
+			continue
 		}
 		for _, p := range meth.Signature.Parameters {
-			a.resolveFunctionParam(ft, p)
+			a.resolveFunctionParam(ft, p, targetT)
 		}
-		if ft.Params[0].Type != SelfT {
+		if ft.Params[0].Name != "self" {
 			a.errorF(meth.Signature.Parameters[0],
 				"all methods must take `self` as the first argument",
 			)
@@ -1787,8 +1984,11 @@ func (a *Analyzer) resolveFunctionCallArgs(
 
 	var args []FunctionCallArgument
 	for idx, p := range ft.Params[startAt:] {
-		_, arg, err := getArgByName(expr.Args, p.Name)
-		if err != nil {
+		var arg *ast.Argument
+		if p.Name != "" {
+			_, arg, _ = getArgByName(expr.Args, p.Name)
+		}
+		if arg == nil {
 			if idx >= len(expr.Args) {
 				a.errorF(expr, "`%s` expects %d args but %d were passed",
 					ft.Name, want, len(expr.Args),
@@ -1816,6 +2016,7 @@ func (a *Analyzer) resolveFunctionCallArgs(
 			return nil, false
 		}
 
+		var err error
 		if m != nil {
 			err = unifyGeneric(p.Type, argV.GetType(), m)
 		} else {
@@ -1833,17 +2034,18 @@ func (a *Analyzer) resolveFunctionCallArgs(
 
 func (a *Analyzer) resolveGenericCall(
 	ft *FunctionT, expr *ast.CallExpr, fb *FunctionBody,
+	recv Value,
 ) Value {
 	m := map[*TypeParamT]Type{}
 
 	args, ok := a.resolveFunctionCallArgs(
-		ft, expr, fb, false, m,
+		ft, expr, fb, recv != nil, m,
 	)
 	if !ok {
 		return InvalidV
 	}
 
-	fc := &FunctionCall{Node: expr, Callee: ft, Args: args}
+	fc := &FunctionCall{Node: expr, Callee: ft, Args: args, Receiver: recv}
 	for _, tp := range ft.TypeParams {
 		t, known := m[tp]
 		if !known {
@@ -1851,6 +2053,7 @@ func (a *Analyzer) resolveGenericCall(
 				"cannot infer type paramater `%s` of `%s`",
 				tp.Name, ft.Name,
 			)
+			return InvalidV
 		}
 		if tp.Bound != nil {
 			if err := satisfies(t, tp.Bound); err != nil {
@@ -1864,11 +2067,31 @@ func (a *Analyzer) resolveGenericCall(
 	return fc
 }
 
+func (a *Analyzer) resolveMethodCall(
+	m *MethodV, expr *ast.CallExpr, fb *FunctionBody,
+) Value {
+	if len(m.Type.TypeParams) > 0 {
+		return a.resolveGenericCall(m.Type, expr, fb, m.Receiver)
+	}
+	fc := &FunctionCall{
+		Node:     expr,
+		Callee:   m.Type,
+		Type:     m.Type.ReturnType,
+		Receiver: m.Receiver,
+	}
+	args, ok := a.resolveFunctionCallArgs(m.Type, expr, fb, true, nil)
+	if !ok {
+		return InvalidV
+	}
+	fc.Args = args
+	return fc
+}
+
 func (a *Analyzer) resolveFunctionCall(
 	ft *FunctionT, expr *ast.CallExpr, fb *FunctionBody,
 ) Value {
 	if len(ft.TypeParams) > 0 {
-		return a.resolveGenericCall(ft, expr, fb)
+		return a.resolveGenericCall(ft, expr, fb, nil)
 	}
 	fc := &FunctionCall{Node: expr, Callee: ft, Type: ft.ReturnType}
 	args, ok := a.resolveFunctionCallArgs(
@@ -1948,23 +2171,6 @@ func (a *Analyzer) resolveVariantConstruction(
 	return &VariantConstruction{Type: vt, Args: args}
 }
 
-func (a *Analyzer) resolveMethodCall(
-	m *MethodV, expr *ast.CallExpr, fb *FunctionBody,
-) Value {
-	fc := &FunctionCall{
-		Node:   expr,
-		Callee: m.Type,
-		Type:   m.Type.ReturnType,
-	}
-	args, ok := a.resolveFunctionCallArgs(m.Type, expr, fb, true, nil)
-	if !ok {
-		return InvalidV
-	}
-	fc.Args = args
-	// fc.Args = append(fc.Args, otherArgs...)
-	return fc
-}
-
 func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
 	leftVal := a.resolveExpr(expr.Left, fb, nil)
 	switch t := leftVal.(type) {
@@ -1977,7 +2183,27 @@ func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
 	case *FunctionV:
 		return a.resolveFunctionCall(t.Type, expr, fb)
 	}
-	return InvalidV
+
+	if leftVal.GetType() == InvalidT {
+		return InvalidV
+	}
+
+	ft, ok := leftVal.GetType().(*FunctionT)
+	if !ok {
+		a.errorF(expr.Left, "`%s` is not callable", leftVal.GetType().getName())
+		return InvalidV
+	}
+	args, ok := a.resolveFunctionCallArgs(ft, expr, fb, false, nil)
+	if !ok {
+		return InvalidV
+	}
+	return &FunctionCall{
+		Node:    expr,
+		Callee:  ft,
+		CalleeV: leftVal,
+		Args:    args,
+		Type:    ft.ReturnType,
+	}
 }
 
 func compare[T cmp.Ordered](op Operator, a, b T) (result, ok bool) {
@@ -2155,18 +2381,30 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Val
 		}
 		return &MethodV{Name: meth.Name, Type: meth, Receiver: container}
 	case *StructT:
-		idx, field, err := t.GetField(expr.Member)
+		if idx, field, err := t.GetField(expr.Member); err == nil {
+			return &FieldAccess{
+				Node: expr, Container: container,
+				Index: idx, Type: field.Type,
+			}
+		}
+		if m, err := t.GetMethod(expr.Member); err == nil {
+			return &MethodV{Name: m.Name, Type: m, Receiver: container}
+		}
+		a.errorF(expr, "`%s` has no field or method `%s`",
+			t.getName(), expr.Member,
+		)
+		return InvalidV
+	case *EnumT:
+		a.errorF(expr.Container, "`%s` has no fields", t.Name)
+		return InvalidV
+	case *TypeParamT:
+		meth, err := t.GetMethod(expr.Member)
 		if err != nil {
 			a.addError(expr, err)
 			return InvalidV
 		}
-		return &FieldAccess{
-			Node: expr, Container: container,
-			Index: idx, Type: field.Type,
-		}
-	case *EnumT:
-		a.errorF(expr.Container, "`%s` has no fields", t.Name)
-		return InvalidV
+		meth = subGeneric(meth, map[*TypeParamT]Type{SelfT: t}).(*FunctionT)
+		return &MethodV{Name: meth.Name, Type: meth, Receiver: container}
 	default:
 		a.errorF(expr.Container, "container value %T not currently supported", t)
 		return InvalidV
@@ -2368,6 +2606,100 @@ func (a *Analyzer) resolveSpreadExpr(
 	return sv
 }
 
+func (a *Analyzer) resolveFunctionExpr(node *ast.FunctionExpr) Value {
+	ft := &FunctionT{
+		Node:   node,
+		RState: Resolved,
+		Layer:  User,
+	}
+	a.enterScope("[lit]")
+	for _, p := range node.Signature.Parameters {
+		a.resolveFunctionParam(ft, p, nil)
+	}
+	ft.ReturnType = a.resolveType(node.Signature.ReturnType)
+	a.exitScope()
+	return &FunctionLit{Node: node, Body: a.resolveBody(ft, node.Body)}
+}
+
+func (a *Analyzer) resolveResultExpr(
+	node *ast.ResultExpr, fb *FunctionBody, targetT Type,
+) Value {
+	want, _ := targetT.(*ResultT) // nil when there is no expected Result type
+	v := &WrapperV{Node: node, Kind: WrapOk}
+
+	if node.IsError {
+		v.Kind = WrapErr
+		if want == nil {
+			a.errorF(node, "cannot infer the type of `Err()`")
+			return InvalidV
+		}
+		// TODO: the value of Err() must satisfy Error.
+		if v.Value = a.resolveExpr(node.Value, fb, nil); !a.requireValue(node.Value, v.Value) {
+			return InvalidV
+		}
+		v.Type = want
+		return v
+	}
+
+	// Ok() with no value is void!
+	elem := Type(VoidT)
+	if node.Value != nil {
+		var target Type
+		if want != nil {
+			target = want.ElemType
+		}
+		v.Value = a.resolveExpr(node.Value, fb, target)
+		if !a.requireValue(node.Value, v.Value) {
+			return InvalidV
+		}
+		elem = v.Value.GetType()
+	}
+	if want != nil {
+		if err := identical(want.ElemType, elem); err != nil {
+			a.addError(node, err)
+			return InvalidV
+		}
+	}
+	v.Type = &ResultT{ElemType: elem}
+	return v
+}
+
+func (a *Analyzer) resolveMaybeExpr(
+	node *ast.MaybeExpr, fb *FunctionBody, targetT Type,
+) Value {
+	want, _ := targetT.(*MaybeT)
+	v := &WrapperV{Node: node, Kind: WrapSome}
+
+	if node.IsNone {
+		v.Kind = WrapNone
+		if want == nil {
+			a.errorF(node, "cannot infer the type of `None()`")
+			return InvalidV
+		}
+		v.Type = want
+		return v
+	}
+
+	var target Type
+	if want != nil {
+		target = want.ElemType
+	}
+	v.Value = a.resolveExpr(node.Value, fb, target)
+	if !a.requireValue(node.Value, v.Value) {
+		return InvalidV
+	}
+	if want != nil {
+		if err := identical(want.ElemType, v.Value.GetType()); err != nil {
+			a.addError(node.Value, err)
+			return InvalidV
+		}
+	}
+	v.Type = &MaybeT{ElemType: v.Value.GetType()}
+	return v
+}
+
+func (a *Analyzer) resolveTryExpr() {}
+
 func (a *Analyzer) resolveExpr(
 	expr ast.Expression, fb *FunctionBody, targetT Type,
 ) Value {
@@ -2398,6 +2730,12 @@ func (a *Analyzer) resolveExpr(
 		return a.resolveSequenceLiteral(t, fb, targetT)
 	case *ast.SubscriptExpr:
 		return a.resolveSubscriptExpr(t, fb)
+	case *ast.FunctionExpr:
+		return a.resolveFunctionExpr(t)
+	case *ast.ResultExpr:
+		return a.resolveResultExpr(t, fb, targetT)
+	case *ast.MaybeExpr:
+		return a.resolveMaybeExpr(t, fb, targetT)
 	}
 	return InvalidV
 }
@@ -2411,6 +2749,10 @@ func subGeneric(t Type, m map[*TypeParamT]Type) Type {
 		return t
 	case *SliceT:
 		return &SliceT{ElementType: subGeneric(t.ElementType, m)}
+	case *ResultT:
+		return &ResultT{ElemType: subGeneric(t.ElemType, m)}
+	case *MaybeT:
+		return &MaybeT{ElemType: subGeneric(t.ElemType, m)}
 	case *FunctionT:
 		ft := *t
 		ft.Params = make([]FParam, len(t.Params))
@@ -2438,9 +2780,21 @@ func unifyGeneric(paramT, argT Type, m map[*TypeParamT]Type) error {
 			return mismatch(paramT, argT)
 		}
 		return unifyGeneric(pt.ElementType, a.ElementType, m)
+	case *ResultT:
+		a, ok := argT.(*ResultT)
+		if !ok {
+			return mismatch(paramT, argT)
+		}
+		return unifyGeneric(pt.ElemType, a.ElemType, m)
+	case *MaybeT:
+		a, ok := argT.(*MaybeT)
+		if !ok {
+			return mismatch(paramT, argT)
+		}
+		return unifyGeneric(pt.ElemType, a.ElemType, m)
 	case *FunctionT:
 		a, ok := argT.(*FunctionT)
-		if !ok || len(pt.Params) == len(a.Params) {
+		if !ok || len(pt.Params) != len(a.Params) {
 			return mismatch(paramT, argT)
 		}
 		for idx := range pt.Params {
@@ -2452,89 +2806,3 @@ func unifyGeneric(paramT, argT Type, m map[*TypeParamT]Type) error {
 	}
 	return identical(argT, paramT)
 }
-
-func mismatch(want, got Type) error {
-	return fmt.Errorf("type `%s` != type `%s`", got.getName(), want.getName())
-}
-
-func hasFreeTParams(
-	t Type, free []*TypeParamT, m map[*TypeParamT]Type,
-) bool {
-	switch t := t.(type) {
-	case *TypeParamT:
-		_, known := m[t]
-		return !known && slices.Contains(free, t)
-	case *SliceT:
-		return hasFreeTParams(t.ElementType, free, m)
-	case *FunctionT:
-		for _, p := range t.Params {
-			if hasFreeTParams(p.Type, free, m) {
-				return true
-			}
-		}
-		return hasFreeTParams(t.ReturnType, free, m)
-	}
-	return false
-}
-
-func satisfies(t Type, iface *InterfaceT) error {
-	for name, want := range iface.Methods {
-		got, err := t.GetMethod(name)
-		if err != nil {
-			return fmt.Errorf(
-				"`%s` does not satisfy `%s`; no method `%s`",
-				t.getName(),
-				iface.getName(),
-				name,
-			)
-		}
-		if !sameSignature(got, want, t) {
-			return fmt.Errorf(
-				"`%s` does not satisfy `%s`; method `%s` has wrong signature",
-				t.getName(),
-				iface.getName(),
-				name,
-			)
-		}
-	}
-	return nil
-}
-
-func sameSignature(got, want *FunctionT, t Type) bool {
-	if len(got.TypeParams) > 0 {
-		return false
-	}
-	if len(got.Params) != len(want.Params) {
-		return false
-	}
-	for idx := 1; idx < len(want.Params); idx++ {
-		gotT := got.Params[idx].Type
-		wantT := subGeneric(want, map[*TypeParamT]Type{SelfT: t})
-		if identical(gotT, wantT) != nil {
-			return false
-		}
-	}
-	return true
-}
-
-// func replaceSelf(typ, t Type) Type {
-// 	switch typ := typ.(type) {
-// 	case *PrimitiveType:
-// 		if typ == SelfT {
-// 			return t
-// 		}
-// 		return typ
-// 	case *SliceT:
-// 		return &SliceT{ElementType: replaceSelf(typ.ElementType, t)}
-// 	case *FunctionT:
-// 		ft := *typ
-// 		ft.Params = make([]FParam, len(typ.Params))
-// 		for i, p := range typ.Params {
-// 			p.Type = replaceSelf(p.Type, t)
-// 			ft.Params[i] = p
-// 		}
-// 		ft.ReturnType = replaceSelf(typ.ReturnType, t)
-// 		return &ft
-// 	}
-// 	return typ
-// }

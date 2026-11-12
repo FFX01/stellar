@@ -158,7 +158,7 @@ fn head[T](xs: []T) -> T? {
     return Some(xs[0]);
 }
 
-fn at[T](xs: []T, i: int) -> T!: xs.get(i);
+fn at[T](xs: []T, i: int) -> T?: xs.get(i);
 
 fn orElse[T](m: T?, d: T) -> T: try m else d;
 
