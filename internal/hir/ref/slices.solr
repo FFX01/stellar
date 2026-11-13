@@ -162,7 +162,7 @@ fn nestedUpdates() -> Grid {
     grid = grid.with(rows=grid.rows.replace(0, grid.rows[0].replace(1, 7)));
     grid = grid.with(rows=grid.rows.replace(1, grid.rows[1].append(4)));
     grid = grid.with(rows=grid.rows.append([]));
-    grid = Grid(...grid, rows=[...grid.rows, []]);   // spread form [provisional]
+    grid = grid.with(rows=[...grid.rows, []]);
 
     var bags = [Bag(name="a", items=[])];
     bags = bags.replace(0, bags[0].with(name="b", items=bags[0].items.append(1)));
@@ -237,7 +237,7 @@ fn nestedLoops(grid: [][]int) -> int {
 // ---------------------------------------------------------------------------
 
 fn safeGet(xs: []int, i: int) -> int! {
-    var x = try xs.get(i);
+    var x = try xs.get(i) else 1;
     return Ok(x);
 }
 

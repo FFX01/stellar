@@ -195,9 +195,10 @@ type Todo struct {
   its zero value. A `Maybe` field may be omitted and is `None()`. A field of any other type
   must be given. Per-field defaults may be added later.
 - **Updated copies:** `todo.with(title="y")` returns a copy with the listed fields replaced.
-  `Todo(...todo, title="y")` means the same **[provisional]** (the spread token is `...`).
+  It is the only form. There is no spread in a struct construction: `Todo(...todo, title="y")`
+  is an error.
 - Fields are read with `.`: `todo.title`. A field cannot be assigned: `todo.title = "y";` is
-  an error. Use `with` or a spread to make an updated value (§5.3).
+  an error. Use `with` to make an updated value (§5.3).
 
 ### 3.5 Enums
 An enum is a tagged union. Each variant may carry named fields.
@@ -257,7 +258,7 @@ type Shape interface {
 **Only functions and methods can be generic.** Type parameters are listed in square brackets
 after the name:
 ```solr
-fn first[T](xs: []T) -> T!: xs.get(0);
+fn first[T](xs: []T) -> T?: xs.get(0);
 fn map[A, B](xs: []A, f: fn(A) -> B) -> []B { ... }
 fn max[T: Comparable](a: T, b: T) -> T: if b.lt(a) { >> a; } else b;
 ```
@@ -412,7 +413,7 @@ This section is the core of the language.
 > Every value is immutable. No operation changes a value in place. Assigning, passing, or
 > storing a value gives the receiver its own value, so nobody else can change what you hold.
 > A variable can be rebound to a new value inside the function that declares it. To get a
-> changed value, you make a new one (`with`, a spread, `append`) and bind it to a name.
+> changed value, you make a new one (`with`, a sequence spread, `append`) and bind it to a name.
 
 ### 5.1 Bindings
 `var x = e;` declares a variable. Inside the function that declares it, the variable can be
@@ -450,7 +451,7 @@ This section is the core of the language.
 To "change" a value, make a new value and rebind the name:
 ```solr
 fn rename(todo: Todo, title: str) -> Todo {
-    return todo.with(title=title);              // or: Todo(...todo, title=title)
+    return todo.with(title=title);
 }
 
 fn bump(s: State) -> State {
@@ -466,8 +467,9 @@ fn grow(xs: []int) -> []int {
 }
 ```
 - `x.with(field=value, ...)` returns a copy of a struct or enum variant with the fields
-  replaced (§10.3). A spread in a construction does the same (§3.4) **[provisional]**.
-- Slices are updated with `append`, `prepend`, `replace` (§10.2), and spreads.
+  replaced (§10.3).
+- Slices are updated with `append`, `prepend`, `replace` (§10.2), and spreads in sequence
+  literals (`[...xs, 5]`).
 - `s.f = v` and `xs[i] = v` are errors. They may become short forms of the rebinds above
   later **[open]**.
 
@@ -568,7 +570,9 @@ Calling a function stored in a field is written the same way as calling a method
 Typing rules are in §9.
 
 ### 6.7 Indexing and slicing
-- `xs[i]` reads an element. An out-of-range index **panics**. `xs.get(i)` returns `T!`.
+- `xs[i]` reads an element. An out-of-range index **panics**. `xs.get(i)` returns `T?`:
+  `None()` when the index is out of range. Maps will follow the same rule: `m[k]` panics for a
+  missing key, and `m.get(k)` returns a `Maybe`.
 - `xs[a:b]`, `xs[:b]`, `xs[a:]` take a sub-sequence, and also work on `str`.
   The result is a value, as always. An implementation may share storage with the original.
 - An element cannot be assigned: `xs[i] = v;` is an error. Use `xs.replace(i, v)` (§10.2).
@@ -774,8 +778,8 @@ type Profile struct {
     pub email: str?              // may be absent. Defaults to None().
 }
 ```
-Which absences are `Maybe` and which are `Result` is **[open]**. `xs.get(i)` returns a
-`Result`.
+Which absences are `Maybe` and which are `Result` is **[open]**. A lookup that can miss
+(`xs.get(i)`, and later `m.get(k)`) returns a `Maybe`.
 
 ### 8.3 `try`
 `try e` unwraps a `Result` (or `Maybe` **[provisional]**).
@@ -874,10 +878,10 @@ Every method returns a new value. No method changes its receiver.
 | `xs.append(x)` | new slice with `x` added at the end |
 | `xs.prepend(x)` | new slice with `x` added at the front |
 | `xs.replace(i, x)` | new slice with element `i` replaced by `x`. An out-of-range index panics. |
-| `xs.get(i)` | `T!`, the element, or an error if out of range |
+| `xs.get(i)` | `T?`: the element, or `None()` if the index is out of range |
 | `xs.contains(x)` | `bool` |
-| `xs.find(f)` | `T!` the first element for which `f` is true **[open]** |
-| `s.get(i)` | `str!` for a `str` |
+| `xs.find(f)` | `T?`: the first element for which `f` is true **[open]** |
+| `s.get(i)` | `str?` for a `str` |
 
 Sorting is **[not implemented]**. It will probably take a comparison function
 `fn(a: T, b: T) -> int`. Removing an element (`pop`) is **[open]**.

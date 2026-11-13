@@ -1,5 +1,3 @@
-var forwardRef: State = State(item=Item());
-
 type State struct {
     name: str,
     item: Item
@@ -12,5 +10,10 @@ impl Item {
     fn count(self) -> int {
         return self.value;
     }
+}
+
+fn main() {
+    var s = State(item=Item(value=1));
+    var s2 = s.with(name="tom");
 }
 

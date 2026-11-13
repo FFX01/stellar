@@ -120,6 +120,40 @@ type Type interface {
 	GetMethod(string) (*FunctionT, error)
 }
 
+type ErrorType struct{}
+
+func (et *ErrorType) typ()                      {}
+func (et *ErrorType) getName() string           { return "Error" }
+func (et *ErrorType) GetState() ResolutionState { return Resolved }
+func (et *ErrorType) GetMethod(n string) (*FunctionT, error) {
+	return nil, fmt.Errorf("`%s`, does not implement method `%s`",
+		et.getName(), n,
+	)
+}
+func (et *ErrorType) genError() *FunctionT {
+	return &FunctionT{
+		Name:       "error",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: StrT,
+		Params: []FParam{
+			{Name: "self", Type: ErrorT},
+		},
+	}
+}
+func (et *ErrorType) genWrap() *FunctionT {
+	return &FunctionT{
+		Name:       "wrap",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: ErrorT,
+		Params: []FParam{
+			{Name: "self", Type: ErrorT},
+			{Name: "cause", Type: ErrorT},
+		},
+	}
+}
+
 type VariantT struct {
 	Node   *ast.EnumMember
 	Name   string
@@ -211,8 +245,36 @@ func (st *SliceT) GetMethod(name string) (*FunctionT, error) {
 		return st.genReplace(), nil
 	case "get":
 		return st.genGet(), nil
+	case "prepend":
+		return st.genPrepend(), nil
+	case "contains":
+		return st.genContains(), nil
 	default:
 		return nil, fmt.Errorf("slice type has no method `%s`", name)
+	}
+}
+func (st *SliceT) genContains() *FunctionT {
+	return &FunctionT{
+		Name:   "contains",
+		Layer:  Builtin,
+		RState: Resolved,
+		Params: []FParam{
+			{Name: "self", Type: st},
+			{Name: "elem", Type: st.ElementType},
+		},
+		ReturnType: BoolT,
+	}
+}
+func (st *SliceT) genPrepend() *FunctionT {
+	return &FunctionT{
+		Name:   "prepend",
+		Layer:  Builtin,
+		RState: Resolved,
+		Params: []FParam{
+			{Name: "self", Type: st},
+			{Name: "elem", Type: st.ElementType},
+		},
+		ReturnType: st,
 	}
 }
 
@@ -229,15 +291,13 @@ func (st *SliceT) genAppend() *FunctionT {
 	}
 }
 func (st *SliceT) genGet() *FunctionT {
-	elemT := &TypeParamT{Name: "T"}
 	return &FunctionT{
 		Name:       "get",
 		Layer:      Builtin,
-		ReturnType: &MaybeT{ElemType: elemT},
+		ReturnType: &MaybeT{ElemType: st.ElementType},
 		RState:     Resolved,
-		TypeParams: []*TypeParamT{elemT},
 		Params: []FParam{
-			{Name: "self", Type: SelfT},
+			{Name: "self", Type: st},
 			{Name: "idx", Type: IntT},
 		},
 	}
@@ -286,6 +346,7 @@ func (st *StructT) GetField(name string) (int, *Field, error) {
 }
 
 func (st *StructT) GetMethod(n string) (*FunctionT, error) {
+	// user defined
 	if m, ok := st.Methods[n]; ok {
 		return m, nil
 	}
@@ -340,6 +401,7 @@ var (
 	TypeRefT = &PrimitiveType{Name: "typeRef"}
 	SelfT    = &TypeParamT{Name: "Self"}
 	AnyT     = &PrimitiveType{Name: "any"}
+	ErrorT   = &ErrorType{}
 
 	printTp = &TypeParamT{Name: "T", Bound: StringableI}
 	PrintT  = &FunctionT{
@@ -475,6 +537,22 @@ var (
 	VoidV    = &VoidValue{}
 )
 
+type WithV struct {
+	Receiver Value
+	Type     Type
+}
+
+func (wv *WithV) val()          {}
+func (wv *WithV) GetType() Type { return wv.Type }
+
+type ErrorV struct {
+	Message string
+	Cause   *ErrorV
+}
+
+func (ev *ErrorV) val()          {}
+func (ev *ErrorV) GetType() Type { return ErrorT }
+
 type TryV struct {
 	Node  *ast.TryExpr
 	Value Value // must be Result or Maybe
@@ -529,6 +607,7 @@ func (sv *SpreadValue) GetType() Type {
 
 type VariantConstruction struct {
 	Type *VariantT
+	Base Value
 	Args []NamedArg
 }
 
@@ -575,6 +654,7 @@ func (cv *CopyV) GetType() Type { return cv.Value.GetType() }
 type StructConstruction struct {
 	Node   *ast.CallExpr
 	Callee *StructT
+	Base   Value
 	Args   []NamedArg
 }
 
@@ -759,7 +839,7 @@ type Block struct {
 }
 
 type CaseBinding struct {
-	Node *ast.IdentifierExpr
+	Node ast.Node
 	Name string
 	Type Type
 	Case Value
@@ -1783,6 +1863,10 @@ func (a *Analyzer) resolveImplDecl(node *ast.ImplDeclStmt) {
 	targetT := a.resolveType(node.Target)
 
 	for _, meth := range node.Methods {
+		if meth.Signature.Name == "with" {
+			a.errorF(meth, "`with` is a builtin method and cannot be shadowed")
+			continue
+		}
 		fn := fmt.Sprintf("%s.%s", targetT.getName(), meth.Signature.Name)
 		ft := &FunctionT{
 			Node: meth, Name: fn, RState: Resolved,
@@ -2115,16 +2199,31 @@ func hasZeroValue(t Type) bool {
 }
 
 func (a *Analyzer) resolveStructConstruction(
-	st *StructT, expr *ast.CallExpr, fb *FunctionBody,
+	st *StructT, expr *ast.CallExpr, fb *FunctionBody, base Value,
 ) Value {
-	sc := &StructConstruction{Node: expr, Callee: st}
+	sc := &StructConstruction{Node: expr, Callee: st, Base: base}
 	if len(expr.Args) > len(st.Fields) {
 		a.errorF(expr, "too many arguments to constructor for struct `%s`", st.Name)
 		return InvalidV
 	}
+
+	for _, arg := range expr.Args {
+		if arg.Name == "" {
+			a.errorF(arg, "positional args not allowed in struct construction")
+			return InvalidV
+		}
+		if _, _, err := st.GetField(arg.Name); err != nil {
+			a.addError(arg, err)
+			return InvalidV
+		}
+	}
+
 	for _, f := range st.Fields {
 		_, arg, err := getArgByName(expr.Args, f.Name)
 		if err != nil {
+			if base != nil {
+				continue
+			}
 			if hasZeroValue(f.Type) {
 				sc.Args = append(sc.Args,
 					NamedArg{Node: arg, Name: f.Name, Value: &ZeroV{Type: f.Type}})
@@ -2152,12 +2251,15 @@ func (a *Analyzer) resolveStructConstruction(
 }
 
 func (a *Analyzer) resolveVariantConstruction(
-	vt *VariantT, expr *ast.CallExpr, fb *FunctionBody,
+	vt *VariantT, expr *ast.CallExpr, fb *FunctionBody, base Value,
 ) Value {
 	var args []NamedArg
 	for _, f := range vt.Fields {
 		_, arg, err := getArgByName(expr.Args, f.Name)
 		if err != nil {
+			if base != nil {
+				continue
+			}
 			a.addError(expr, err)
 			args = append(args, NamedArg{Name: f.Name, Value: InvalidV})
 			continue
@@ -2175,11 +2277,18 @@ func (a *Analyzer) resolveCallExpr(expr *ast.CallExpr, fb *FunctionBody) Value {
 	leftVal := a.resolveExpr(expr.Left, fb, nil)
 	switch t := leftVal.(type) {
 	case *StructV:
-		return a.resolveStructConstruction(t.Type, expr, fb)
+		return a.resolveStructConstruction(t.Type, expr, fb, nil)
+	case *WithV:
+		switch t2 := t.Type.(type) {
+		case *StructT:
+			return a.resolveStructConstruction(t2, expr, fb, t.Receiver)
+		case *VariantT:
+			return a.resolveVariantConstruction(t2, expr, fb, t.Receiver)
+		}
 	case *MethodV:
 		return a.resolveMethodCall(t, expr, fb)
 	case *VariantV:
-		return a.resolveVariantConstruction(t.Type, expr, fb)
+		return a.resolveVariantConstruction(t.Type, expr, fb, nil)
 	case *FunctionV:
 		return a.resolveFunctionCall(t.Type, expr, fb)
 	}
@@ -2387,6 +2496,10 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Val
 				Index: idx, Type: field.Type,
 			}
 		}
+		// handle struct.with(...)
+		if expr.Member == "with" {
+			return &WithV{Receiver: container, Type: t}
+		}
 		if m, err := t.GetMethod(expr.Member); err == nil {
 			return &MethodV{Name: m.Name, Type: m, Receiver: container}
 		}
@@ -2397,6 +2510,12 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Val
 	case *EnumT:
 		a.errorF(expr.Container, "`%s` has no fields", t.Name)
 		return InvalidV
+	case *VariantT:
+		if expr.Member == "with" {
+			return &WithV{Receiver: container, Type: t}
+		} else {
+			return InvalidV
+		}
 	case *TypeParamT:
 		meth, err := t.GetMethod(expr.Member)
 		if err != nil {
@@ -2633,7 +2752,6 @@ func (a *Analyzer) resolveResultExpr(
 			a.errorF(node, "cannot infer the type of `Err()`")
 			return InvalidV
 		}
-		// TODO: the value of Err() must satisfy Error.
 		if v.Value = a.resolveExpr(node.Value, fb, nil); !a.requireValue(node.Value, v.Value) {
 			return InvalidV
 		}
@@ -2698,7 +2816,87 @@ func (a *Analyzer) resolveMaybeExpr(
 	return v
 }
 
-func (a *Analyzer) resolveTryExpr() {}
+func (a *Analyzer) resolveTryExpr(
+	expr *ast.TryExpr, fb *FunctionBody,
+) Value {
+	tv := &TryV{Node: expr}
+
+	val := a.resolveExpr(expr.Value, fb, nil)
+	if val.GetType() == InvalidT {
+		return InvalidV
+	}
+	tv.Value = val
+	if res, isResult := val.GetType().(*ResultT); isResult {
+		tv.Type = res.ElemType
+	} else if may, isMaybe := val.GetType().(*MaybeT); isMaybe {
+		tv.Type = may.ElemType
+	} else {
+		a.errorF(expr.Value, "expected `Maybe` or `Result`, got %s",
+			val.GetType().getName())
+		return InvalidV
+	}
+
+	if expr.ElseValue == nil {
+		ret := fb.Type.ReturnType
+		_, valIsResult := val.GetType().(*ResultT)
+		_, retIsResult := ret.(*ResultT)
+		_, retIsMaybe := ret.(*MaybeT)
+		if (valIsResult && !retIsResult) || (!valIsResult && !retIsMaybe) {
+			a.errorF(expr, "`try` without `else` needs a function that returns `%s`",
+				map[bool]string{true: "Result", false: "Maybe"}[valIsResult])
+			return InvalidV
+		}
+		return tv
+	}
+
+	a.enterScope("[else]")
+	defer a.exitScope()
+
+	if expr.ErrName != "" {
+		if _, ok := tv.Value.GetType().(*MaybeT); ok {
+			a.errorF(expr, "cannot bind `None` to `%s`", expr.ErrName)
+			return InvalidV
+		}
+		cb := &CaseBinding{Node: expr, Name: expr.ErrName, Type: ErrorT}
+		tv.Err = cb
+		if err := a.CurrentScope.declareValue(cb.Name, cb); err != nil {
+			a.addError(expr, err)
+		}
+	}
+
+	if expr.ElseValue != nil {
+		blk := a.resolveBranch(fb, expr.ElseValue, true, true)
+		if !terminates(blk) {
+			if err := identical(tv.Type, blk.Type); err != nil {
+				a.addError(expr.ElseValue, err)
+				return InvalidV
+			}
+		}
+		tv.Else = blk
+	}
+
+	return tv
+}
+
+func (a *Analyzer) resolveNegativeExpr(
+	expr *ast.NegativeExpr, fb *FunctionBody,
+) Value {
+	val := a.resolveExpr(expr.Value, fb, nil)
+	if lit, ok := val.(*IntLiteral); ok {
+		lit.Value = -lit.Value
+		return lit
+	} else if lit, ok := val.(*FloatLiteral); ok {
+		lit.Value = -lit.Value
+		return lit
+	} else {
+		a.errorF(
+			expr,
+			"value of type `%s` cannot be negative",
+			val.GetType().getName(),
+		)
+		return InvalidV
+	}
+}
 
 func (a *Analyzer) resolveExpr(
 	expr ast.Expression, fb *FunctionBody, targetT Type,
@@ -2736,6 +2934,10 @@ func (a *Analyzer) resolveExpr(
 		return a.resolveResultExpr(t, fb, targetT)
 	case *ast.MaybeExpr:
 		return a.resolveMaybeExpr(t, fb, targetT)
+	case *ast.TryExpr:
+		return a.resolveTryExpr(t, fb)
+	case *ast.NegativeExpr:
+		return a.resolveNegativeExpr(t, fb)
 	}
 	return InvalidV
 }
