@@ -88,6 +88,12 @@ func identical(a, b Type) error {
 			return defaultErr
 		}
 		return identical(at.ElemType, bt.ElemType)
+	case *InterfaceT:
+		if err := satisfies(b, at); err != nil {
+			return err
+		} else {
+			return nil
+		}
 	default:
 		return fmt.Errorf("unknown type `%T`", a)
 	}
@@ -165,4 +171,67 @@ func hasFreeTParams(
 		return hasFreeTParams(t.ReturnType, free, m)
 	}
 	return false
+}
+
+type Exit int
+
+const (
+	ExitNone Exit = iota // no exit
+	ExitLoop             // break, continue
+	ExitFunc             // return infinite loop
+)
+
+func blockExit(b *Block) Exit {
+	e := ExitNone
+	for _, s := range b.Statements {
+		e = max(e, stmtExit(s))
+	}
+	return e
+}
+
+func stmtExit(s Statement) Exit {
+	switch t := s.(type) {
+	case *ReturnStatement:
+		return ExitFunc
+	case *BreakStmt, *ContinueStmt:
+		return ExitLoop
+	case *ExpressionStatement:
+		return valueExit(t.Value)
+	case *YieldStmt:
+		return valueExit(t.Value)
+	case *VariableStmt:
+		return valueExit(t.Value.Value)
+	}
+	return ExitNone
+}
+
+func valueExit(v Value) Exit {
+	switch t := v.(type) {
+	case *If:
+		if t.Else == nil {
+			return ExitNone
+		}
+		return min(blockExit(t.Then), blockExit(t.Else))
+	case *Switch:
+		if len(t.Arms) == 0 {
+			return ExitNone
+		}
+		e := ExitFunc
+		for _, arm := range t.Arms {
+			e = min(e, blockExit(arm.Body))
+		}
+		return e
+	case *LoopV:
+		// `for { }` with no `break` never ends. Do not look into the body:
+		// a `break` or `continue` there targets this loop, not an outer one.
+		if t.Iter == nil && t.Cond == nil && !t.HasBreak {
+			return ExitFunc
+		}
+	}
+	return ExitNone
+}
+
+func isYield(s Statement) bool {
+	_, ok := s.(*YieldStmt)
+	return ok
 }

@@ -249,8 +249,45 @@ func (st *SliceT) GetMethod(name string) (*FunctionT, error) {
 		return st.genPrepend(), nil
 	case "contains":
 		return st.genContains(), nil
+	case "len":
+		return st.genLen(), nil
+	case "map":
+		return st.genMap()
 	default:
 		return nil, fmt.Errorf("slice type has no method `%s`", name)
+	}
+}
+func (st *SliceT) genMap() (*FunctionT, error) {
+	t := &TypeParamT{Name: "T"}
+	mapF := &FunctionT{
+		Name:       "lit",
+		RState:     Resolved,
+		ReturnType: t,
+		Params: []FParam{
+			{Name: "elem", Type: t},
+		},
+	}
+	return &FunctionT{
+		Name:       "map",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: &SliceT{ElementType: t},
+		TypeParams: []*TypeParamT{t},
+		Params: []FParam{
+			{Name: "self", Type: st},
+			{Name: "mapF", Type: mapF},
+		},
+	}, nil
+}
+func (st *SliceT) genLen() *FunctionT {
+	return &FunctionT{
+		Name:       "len",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: IntT,
+		Params: []FParam{
+			{Name: "self", Type: st},
+		},
 	}
 }
 func (st *SliceT) genContains() *FunctionT {
@@ -365,18 +402,60 @@ func (pt *PrimitiveType) getName() string           { return pt.Name }
 func (pt *PrimitiveType) GetMethod(name string) (*FunctionT, error) {
 	switch name {
 	case "string":
-		ft := &FunctionT{
-			Name:       fmt.Sprintf("%s.%s", pt.Name, "string"),
-			ReturnType: StrT,
-			RState:     Resolved,
-			Layer:      Builtin,
-			Params: []FParam{
-				{Name: "self", Type: SelfT},
-			},
-		}
-		return ft, nil
+		return pt.genString(), nil
+	case "len":
+		return pt.genLen()
+	case "compare":
+		return pt.genCompare()
 	}
 	return nil, fmt.Errorf("not implemented")
+}
+func (pt *PrimitiveType) genCompare() (*FunctionT, error) {
+	ft := &FunctionT{
+		Name:       "compare",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: IntT,
+		Params: []FParam{
+			{Name: "self", Type: pt},
+			{Name: "other", Type: pt},
+		},
+	}
+	switch pt {
+	case StrT, IntT, FloatT, BoolT:
+		return ft, nil
+	default:
+		return nil, fmt.Errorf("method `compare` not implemented for type `%s`",
+			pt.getName())
+	}
+}
+func (pt *PrimitiveType) genLen() (*FunctionT, error) {
+	if pt != StrT {
+		return nil, fmt.Errorf(
+			"method `len` is not implemented for type `%s`",
+			pt.getName(),
+		)
+	}
+	return &FunctionT{
+		Name:       "len",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: IntT,
+		Params: []FParam{
+			{Name: "self", Type: pt},
+		},
+	}, nil
+}
+func (pt *PrimitiveType) genString() *FunctionT {
+	return &FunctionT{
+		Name:       "string",
+		ReturnType: StrT,
+		RState:     Resolved,
+		Layer:      Builtin,
+		Params: []FParam{
+			{Name: "self", Type: pt},
+		},
+	}
 }
 
 var stringableMap = map[string]*FunctionT{
@@ -415,13 +494,15 @@ var (
 		RState:     Resolved,
 	}
 
-	LenT = &FunctionT{
-		Name:       "len",
+	maxTp = &TypeParamT{Name: "T", Bound: ComparableI}
+	MaxT  = &FunctionT{
+		Name:       "max",
 		Layer:      Builtin,
-		ReturnType: IntT,
 		RState:     Resolved,
+		ReturnType: maxTp,
+		TypeParams: []*TypeParamT{maxTp},
 		Params: []FParam{
-			{Name: "value", Type: AnyT},
+			{Name: "seq", Type: &SliceT{ElementType: maxTp}},
 		},
 	}
 )
@@ -464,6 +545,39 @@ var (
 				ReturnType: StrT,
 				Layer:      Builtin,
 				RState:     Resolved,
+				Params: []FParam{
+					{Name: "self", Type: SelfT},
+				},
+			},
+		},
+	}
+	ComparableI = &InterfaceT{
+		Name:  "Comparable",
+		Layer: Builtin,
+		State: Resolved,
+		Methods: map[string]*FunctionT{
+			"compare": {
+				Name:       "compare",
+				Layer:      Builtin,
+				RState:     Resolved,
+				ReturnType: IntT,
+				Params: []FParam{
+					{Name: "self", Type: SelfT},
+					{Name: "other", Type: SelfT},
+				},
+			},
+		},
+	}
+	SizedI = &InterfaceT{
+		Name:  "Sized",
+		Layer: Builtin,
+		State: Resolved,
+		Methods: map[string]*FunctionT{
+			"len": {
+				Name:       "len",
+				Layer:      Builtin,
+				RState:     Resolved,
+				ReturnType: IntT,
 				Params: []FParam{
 					{Name: "self", Type: SelfT},
 				},
@@ -532,10 +646,28 @@ type Value interface {
 
 var (
 	PrintV   = &FunctionV{Name: "print", Type: PrintT}
-	LenV     = &FunctionV{Name: "len", Type: LenT}
+	MaxV     = &FunctionV{Name: "max", Type: MaxT}
 	InvalidV = &InvalidValue{}
 	VoidV    = &VoidValue{}
 )
+
+type LoopIter struct {
+	Container Value
+	Index     *Binding
+	Elem      *Binding
+}
+
+type LoopV struct {
+	Node     ast.Expression
+	Iter     *LoopIter
+	Cond     Value
+	Body     *Block
+	HasBreak bool
+	Type     Type
+}
+
+func (fiv *LoopV) val()          {}
+func (fiv *LoopV) GetType() Type { return fiv.Type }
 
 type WithV struct {
 	Receiver Value
@@ -556,7 +688,7 @@ func (ev *ErrorV) GetType() Type { return ErrorT }
 type TryV struct {
 	Node  *ast.TryExpr
 	Value Value // must be Result or Maybe
-	Err   *CaseBinding
+	Err   *Binding
 	Else  *Block
 	Type  Type
 }
@@ -838,20 +970,20 @@ type Block struct {
 	Type       Type
 }
 
-type CaseBinding struct {
+type Binding struct {
 	Node ast.Node
 	Name string
 	Type Type
 	Case Value
 }
 
-func (cb *CaseBinding) val()          {}
-func (cb *CaseBinding) GetType() Type { return cb.Type }
+func (cb *Binding) val()          {}
+func (cb *Binding) GetType() Type { return cb.Type }
 
 type SwitchArm struct {
 	Node      *ast.SwitchArm
 	Condition Value
-	Binding   *CaseBinding
+	Binding   *Binding
 	Body      *Block
 	IsDefault bool
 }
@@ -928,14 +1060,32 @@ type YieldStmt struct {
 func (ys *YieldStmt) stmt()             {}
 func (ys *YieldStmt) GetNode() ast.Node { return ys.Node }
 
+type BreakStmt struct {
+	Node *ast.BreakStmt
+	Loop *LoopV
+}
+
+func (bs *BreakStmt) stmt()             {}
+func (bs *BreakStmt) GetNode() ast.Node { return bs.Node }
+
+type ContinueStmt struct {
+	Node *ast.ContinueStmt
+	Loop *LoopV
+}
+
+func (cs *ContinueStmt) stmt()             {}
+func (cs *ContinueStmt) GetNode() ast.Node { return cs.Node }
+
 type FunctionBody struct {
 	Node      ast.Node
 	Type      *FunctionT
 	ParamVars []*FunctionParamVar
 	Body      *Block
+	Loops     []*LoopV
 }
 
-func (fb *FunctionBody) val() {}
+func (fb *FunctionBody) val()          {}
+func (fb *FunctionBody) GetType() Type { return fb.Type }
 
 type Analyzer struct {
 	Universe       *Scope
@@ -1010,12 +1160,14 @@ func newUniverse() *Scope {
 		"bool":       BoolT,
 		"void":       VoidT,
 		"print":      PrintT,
-		"len":        LenT,
+		"max":        MaxT,
 		"Stringable": StringableI,
+		"Comparable": ComparableI,
+		"Sized":      SizedI,
 	}
 	u.Values = map[string]Value{
 		"print": PrintV,
-		"len":   LenV,
+		"max":   MaxV,
 	}
 	return u
 }
@@ -1372,7 +1524,7 @@ func (a *Analyzer) resolveAssignStmt(
 	switch t := target.(type) {
 	case *Variable:
 		as.Target = t
-	case *CaseBinding:
+	case *Binding:
 		a.errorF(stmt.Target, "cannot rebind case binding")
 		return
 	default:
@@ -1390,10 +1542,45 @@ func (a *Analyzer) resolveAssignStmt(
 	if as.Value.GetType() == InvalidT || as.Target.GetType() == InvalidT {
 		return
 	}
+
 	if err := identical(as.Target.GetType(), as.Value.GetType()); err != nil {
 		a.addError(stmt.Value, err)
 		return
 	}
+
+	opLit := stmt.Token.Literal
+	binV := &BinaryValue{
+		Left:  as.Target,
+		Right: as.Value,
+		Type:  as.Target.GetType(),
+	}
+	if slices.Contains([]string{"+=", "-=", "/=", "*=", "%="}, opLit) {
+		lt, rt := binV.Left.GetType(), binV.Right.GetType()
+		validTypes := []Type{IntT, FloatT, StrT}
+		if !slices.Contains(validTypes, lt) || !slices.Contains(validTypes, rt) {
+			a.errorF(stmt, "compound assignment not valid for type `%s`",
+				target.GetType().getName(),
+			)
+		}
+	}
+	switch opLit {
+	case "+=":
+		binV.Op = OpAdd
+		as.Value = binV
+	case "-=":
+		binV.Op = OpSub
+		as.Value = binV
+	case "*=":
+		binV.Op = OpMul
+		as.Value = binV
+	case "/=":
+		binV.Op = OpDiv
+		as.Value = binV
+	case "%=":
+		binV.Op = OpMod
+		as.Value = binV
+	}
+
 	block.Statements = append(block.Statements, as)
 }
 
@@ -1430,9 +1617,9 @@ func (a *Analyzer) getIfType(i *If) Type {
 	switch {
 	case tt == InvalidT || et == InvalidT:
 		return InvalidT
-	case terminates(i.Then):
+	case blockExit(i.Then) != ExitNone:
 		return et
-	case terminates(i.Else):
+	case blockExit(i.Else) != ExitNone:
 		return tt
 	}
 	if err := identical(tt, et); err != nil {
@@ -1466,7 +1653,7 @@ func (a *Analyzer) resolveBranch(
 func (a *Analyzer) getSwitchType(sw *Switch) Type {
 	var want Type
 	for _, arm := range sw.Arms {
-		if terminates(arm.Body) {
+		if blockExit(arm.Body) != ExitNone {
 			continue
 		}
 		t := arm.Body.Type
@@ -1502,21 +1689,21 @@ func (a *Analyzer) resolveSwitchArm(
 	switch {
 	case arm.IsDefault && node.Binding != nil && sw.Subject == nil:
 		a.errorF(node.Binding, "invalid `as`; nothing to bind to")
-		arm.Binding = &CaseBinding{
+		arm.Binding = &Binding{
 			Node: node.Binding,
 			Name: node.Binding.Value,
 			Type: InvalidT,
 			Case: InvalidV,
 		}
 	case arm.IsDefault && node.Binding != nil:
-		arm.Binding = &CaseBinding{
+		arm.Binding = &Binding{
 			Node: node.Binding,
 			Name: node.Binding.Value,
 			Type: sw.Subject.GetType(),
 			Case: sw.Subject,
 		}
 	case node.Binding != nil:
-		arm.Binding = &CaseBinding{
+		arm.Binding = &Binding{
 			Node: node.Binding,
 			Name: node.Binding.Value,
 			Type: arm.Condition.GetType(),
@@ -1561,6 +1748,113 @@ func (a *Analyzer) resolveSwitch(
 	return sw
 }
 
+func (a *Analyzer) resolveForInExpr(
+	expr *ast.ForInExpr, fb *FunctionBody, asValue bool,
+) Value {
+	l := &LoopV{Node: expr, Type: VoidT}
+	containerV := a.resolveExpr(expr.Container, fb, nil)
+	containerT, isSlice := containerV.GetType().(*SliceT)
+	if !isSlice {
+		a.errorF(expr.Container,
+			"looping over anything but a slice is not yet implemented",
+		)
+		return InvalidV
+	}
+
+	li := &LoopIter{Container: containerV}
+
+	a.enterScope("[loop]")
+	defer a.exitScope()
+
+	if expr.IndexBinding.Literal != "_" {
+		idxBinding := &Binding{
+			Node: expr,
+			Name: expr.IndexBinding.Literal,
+			Type: IntT,
+		}
+		li.Index = idxBinding
+		if err := a.CurrentScope.declareValue(idxBinding.Name, idxBinding); err != nil {
+			a.addError(expr, err)
+			return InvalidV
+		}
+	}
+	if expr.ValueBinding.Literal != "_" {
+		elemBinding := &Binding{
+			Node: expr,
+			Name: expr.ValueBinding.Literal,
+			Type: containerT.ElementType,
+		}
+		li.Elem = elemBinding
+		if err := a.CurrentScope.declareValue(elemBinding.Name, elemBinding); err != nil {
+			a.addError(expr, err)
+			return InvalidV
+		}
+	}
+
+	l.Iter = li
+
+	fb.Loops = append(fb.Loops, l)
+	l.Body = a.resolveBranch(fb, expr.Body, asValue, true)
+	fb.Loops = fb.Loops[:len(fb.Loops)-1]
+
+	if asValue {
+		switch {
+		case !slices.ContainsFunc(l.Body.Statements, isYield):
+			a.errorF(expr, "a `for` used as a value needs `>>` in its body")
+			return InvalidV
+		case l.Body.Type == InvalidT:
+			return InvalidV
+		case l.Body.Type == VoidT:
+			a.errorF(expr, "`>>` in a `for` cannot give a `void` value")
+			return InvalidV
+		}
+		l.Type = &SliceT{ElementType: l.Body.Type}
+	}
+
+	return l
+}
+
+func (a *Analyzer) resolveForWhileExpr(
+	expr *ast.ForWhileExpr, fb *FunctionBody, asValue bool,
+) Value {
+	l := &LoopV{Node: expr, Type: VoidT}
+
+	if expr.Condition != nil {
+		condV := a.resolveExpr(expr.Condition, fb, nil)
+		if condV.GetType() == InvalidT {
+			return InvalidV
+		}
+		if condV.GetType() != BoolT {
+			a.errorF(
+				expr.Condition,
+				"condition must be a bool",
+			)
+			return InvalidV
+		}
+		l.Cond = condV
+	}
+
+	fb.Loops = append(fb.Loops, l)
+	l.Body = a.resolveBranch(fb, expr.Body, asValue, false)
+	fb.Loops = fb.Loops[:len(fb.Loops)-1]
+
+	if asValue {
+		switch {
+		case !slices.ContainsFunc(l.Body.Statements, isYield):
+			a.errorF(expr, "a `for` used as a value needs `>>` in its body")
+			return InvalidV
+		case l.Body.Type == InvalidT:
+			return InvalidV
+		case l.Body.Type == VoidT:
+			a.errorF(expr, "`>>` in a `for` cannot give a `void` value")
+			return InvalidV
+		}
+		l.Type = &SliceT{ElementType: l.Body.Type}
+	}
+
+	return l
+}
+
 func (a *Analyzer) resolveExprStmt(
 	fb *FunctionBody, block *Block, stmt *ast.ExpressionStatement,
 ) {
@@ -1573,6 +1867,16 @@ func (a *Analyzer) resolveExprStmt(
 		sv := a.resolveSwitch(t, fb, false)
 		block.Statements = append(block.Statements,
 			&ExpressionStatement{Node: t, Value: sv})
+	case *ast.ForInExpr:
+		fiv := a.resolveForInExpr(t, fb, false)
+		block.Statements = append(block.Statements,
+			&ExpressionStatement{Node: t, Value: fiv})
+	case *ast.ForWhileExpr:
+		fwv := a.resolveForWhileExpr(t, fb, false)
+		block.Statements = append(block.Statements,
+			&ExpressionStatement{Node: t, Value: fwv})
+	case *ast.InfixExpr:
+		a.errorF(t, "unused value")
 	default:
 		v := a.resolveExpr(t, fb, nil)
 		es := &ExpressionStatement{Node: stmt.Expression, Value: v}
@@ -1584,7 +1888,7 @@ func exitsBlock(s Statement) bool {
 	if _, ok := s.(*YieldStmt); ok {
 		return true
 	}
-	return stmtTerminates(s)
+	return stmtExit(s) != ExitNone
 }
 
 func (a *Analyzer) resolveStmts(
@@ -1610,6 +1914,14 @@ func (a *Analyzer) resolveYieldStmt(
 	block.Type = v.GetType()
 }
 
+func innerLoop(a *Analyzer, fb *FunctionBody, node ast.Node) *LoopV {
+	if len(fb.Loops) == 0 {
+		a.errorF(node, "`%s` outside a loop", node.TokenLiteral())
+		return nil
+	}
+	return fb.Loops[len(fb.Loops)-1]
+}
+
 func (a *Analyzer) resolveFunctionBodyStmt(
 	fb *FunctionBody, block *Block, stmt ast.Statement,
 ) {
@@ -1629,6 +1941,17 @@ func (a *Analyzer) resolveFunctionBodyStmt(
 			)
 		} else {
 			a.resolveYieldStmt(fb, block, t)
+		}
+	case *ast.BreakStmt:
+		if l := innerLoop(a, fb, t); l != nil {
+			l.HasBreak = true
+			block.Statements = append(block.Statements,
+				&BreakStmt{Node: t, Loop: l})
+		}
+	case *ast.ContinueStmt:
+		if l := innerLoop(a, fb, t); l != nil {
+			block.Statements = append(block.Statements,
+				&ContinueStmt{Node: t, Loop: l})
 		}
 	default:
 		a.errorF(stmt, "unknown statement `%T`", stmt)
@@ -1705,7 +2028,7 @@ func valueTerminates(v Value) bool {
 			if a.IsDefault {
 				return true
 			}
-			if !terminates(a.Body) {
+			if blockExit(a.Body) != ExitFunc {
 				return false
 			}
 		}
@@ -2448,7 +2771,7 @@ func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr, fb *FunctionBody) Value {
 func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Value {
 	container := a.resolveExpr(expr.Container, fb, nil)
 	switch t := container.(type) {
-	case *CaseBinding:
+	case *Binding:
 		switch c := t.Case.(type) {
 		case *VariantV:
 			variant := c.Type
@@ -2857,7 +3180,7 @@ func (a *Analyzer) resolveTryExpr(
 			a.errorF(expr, "cannot bind `None` to `%s`", expr.ErrName)
 			return InvalidV
 		}
-		cb := &CaseBinding{Node: expr, Name: expr.ErrName, Type: ErrorT}
+		cb := &Binding{Node: expr, Name: expr.ErrName, Type: ErrorT}
 		tv.Err = cb
 		if err := a.CurrentScope.declareValue(cb.Name, cb); err != nil {
 			a.addError(expr, err)
@@ -2866,7 +3189,7 @@ func (a *Analyzer) resolveTryExpr(
 
 	if expr.ElseValue != nil {
 		blk := a.resolveBranch(fb, expr.ElseValue, true, true)
-		if !terminates(blk) {
+		if blockExit(blk) == ExitNone {
 			if err := identical(tv.Type, blk.Type); err != nil {
 				a.addError(expr.ElseValue, err)
 				return InvalidV
@@ -2922,6 +3245,10 @@ func (a *Analyzer) resolveExpr(
 		return a.resolveMemberExpr(t, fb)
 	case *ast.IfExpr:
 		return a.resolveIf(t, fb, true)
+	case *ast.ForInExpr:
+		return a.resolveForInExpr(t, fb, true)
+	case *ast.ForWhileExpr:
+		return a.resolveForWhileExpr(t, fb, true)
 	case *ast.SwitchExpr:
 		return a.resolveSwitch(t, fb, true)
 	case *ast.SequenceLiteral:

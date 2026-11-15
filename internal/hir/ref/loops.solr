@@ -1,0 +1,17 @@
+fn main() {
+    for idx, el in [1, 2, 3, 4] {
+        print(el);
+    }
+
+    mut count = 0;
+    for count < 10 {
+        count = count + 1;
+    }
+
+    for {
+        count += 1;
+        if count > 20 {
+            break;
+        }
+    }
+}

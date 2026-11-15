@@ -6,10 +6,10 @@ type State struct {
 }
 impl State {
     fn nextId(self: State) -> int {
-        if len(self.todos) < 1 {
+        if self.todos.len() < 1 {
             return 1;
         }
-        return max(map(self.todos, fn(t: Todo) -> int: t.id)) + 1;
+        return max(self.todos.map(fn(t: Todo) -> int: t.id)) + 1;
     }
 }
 
@@ -61,7 +61,7 @@ fn deleteTodo(s: State, id: int) -> State! {
             >> 1;
         }
     }
-    if len(idx) == 0 {
+    if idx.len() == 0 {
         return errors.ErrF("Todo with id {} not found.", id);
     }
     var newS = s.with(
