@@ -11,6 +11,7 @@ import (
 
 	"stellar/internal/ast"
 	"stellar/internal/errors"
+	"stellar/internal/lexer"
 
 	"github.com/sanity-io/litter"
 )
@@ -120,38 +121,11 @@ type Type interface {
 	GetMethod(string) (*FunctionT, error)
 }
 
-type ErrorType struct{}
-
-func (et *ErrorType) typ()                      {}
-func (et *ErrorType) getName() string           { return "Error" }
-func (et *ErrorType) GetState() ResolutionState { return Resolved }
-func (et *ErrorType) GetMethod(n string) (*FunctionT, error) {
-	return nil, fmt.Errorf("`%s`, does not implement method `%s`",
-		et.getName(), n,
-	)
-}
-func (et *ErrorType) genError() *FunctionT {
-	return &FunctionT{
-		Name:       "error",
-		Layer:      Builtin,
-		RState:     Resolved,
-		ReturnType: StrT,
-		Params: []FParam{
-			{Name: "self", Type: ErrorT},
-		},
-	}
-}
-func (et *ErrorType) genWrap() *FunctionT {
-	return &FunctionT{
-		Name:       "wrap",
-		Layer:      Builtin,
-		RState:     Resolved,
-		ReturnType: ErrorT,
-		Params: []FParam{
-			{Name: "self", Type: ErrorT},
-			{Name: "cause", Type: ErrorT},
-		},
-	}
+type Module struct {
+	Name    string
+	Scope   *Scope
+	Exports map[string]bool
+	Bodies  map[string]*FunctionBody
 }
 
 type VariantT struct {
@@ -215,6 +189,7 @@ func (mt *MaybeT) GetState() ResolutionState { return Resolved }
 func (mt *MaybeT) getName() string {
 	return "Maybe"
 }
+
 func (mt *MaybeT) GetMethod(n string) (*FunctionT, error) {
 	return nil, fmt.Errorf("`Maybe` has no method `%s`", n)
 }
@@ -253,10 +228,65 @@ func (st *SliceT) GetMethod(name string) (*FunctionT, error) {
 		return st.genLen(), nil
 	case "map":
 		return st.genMap()
+	case "find":
+		return st.genFind()
+	case "head":
+		return st.genHead()
+	case "tail":
+		return st.genTail()
 	default:
 		return nil, fmt.Errorf("slice type has no method `%s`", name)
 	}
 }
+
+func (st *SliceT) genTail() (*FunctionT, error) {
+	ft := &FunctionT{
+		Name:       "tail",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: st,
+		Params: []FParam{
+			{Name: "self", Type: st},
+			{Name: "from", Type: IntT},
+		},
+	}
+	return ft, nil
+}
+
+func (st *SliceT) genHead() (*FunctionT, error) {
+	return &FunctionT{
+		Name:       "head",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: st,
+		Params: []FParam{
+			{Name: "self", Type: st},
+			{Name: "to", Type: IntT},
+		},
+	}, nil
+}
+
+func (st *SliceT) genFind() (*FunctionT, error) {
+	findF := &FunctionT{
+		Name:       "findF",
+		RState:     Resolved,
+		ReturnType: BoolT,
+		Params: []FParam{
+			{Name: "elem", Type: st.ElementType},
+		},
+	}
+	return &FunctionT{
+		Name:       "find",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: &MaybeT{ElemType: st.ElementType},
+		Params: []FParam{
+			{Name: "self", Type: st},
+			{Name: "findF", Type: findF},
+		},
+	}, nil
+}
+
 func (st *SliceT) genMap() (*FunctionT, error) {
 	t := &TypeParamT{Name: "T"}
 	mapF := &FunctionT{
@@ -264,7 +294,7 @@ func (st *SliceT) genMap() (*FunctionT, error) {
 		RState:     Resolved,
 		ReturnType: t,
 		Params: []FParam{
-			{Name: "elem", Type: t},
+			{Name: "elem", Type: st.ElementType},
 		},
 	}
 	return &FunctionT{
@@ -279,6 +309,7 @@ func (st *SliceT) genMap() (*FunctionT, error) {
 		},
 	}, nil
 }
+
 func (st *SliceT) genLen() *FunctionT {
 	return &FunctionT{
 		Name:       "len",
@@ -290,6 +321,7 @@ func (st *SliceT) genLen() *FunctionT {
 		},
 	}
 }
+
 func (st *SliceT) genContains() *FunctionT {
 	return &FunctionT{
 		Name:   "contains",
@@ -302,6 +334,7 @@ func (st *SliceT) genContains() *FunctionT {
 		ReturnType: BoolT,
 	}
 }
+
 func (st *SliceT) genPrepend() *FunctionT {
 	return &FunctionT{
 		Name:   "prepend",
@@ -327,6 +360,7 @@ func (st *SliceT) genAppend() *FunctionT {
 		},
 	}
 }
+
 func (st *SliceT) genGet() *FunctionT {
 	return &FunctionT{
 		Name:       "get",
@@ -339,6 +373,7 @@ func (st *SliceT) genGet() *FunctionT {
 		},
 	}
 }
+
 func (st *SliceT) genReplace() *FunctionT {
 	return &FunctionT{
 		Name:       "replace",
@@ -410,6 +445,7 @@ func (pt *PrimitiveType) GetMethod(name string) (*FunctionT, error) {
 	}
 	return nil, fmt.Errorf("not implemented")
 }
+
 func (pt *PrimitiveType) genCompare() (*FunctionT, error) {
 	ft := &FunctionT{
 		Name:       "compare",
@@ -429,6 +465,7 @@ func (pt *PrimitiveType) genCompare() (*FunctionT, error) {
 			pt.getName())
 	}
 }
+
 func (pt *PrimitiveType) genLen() (*FunctionT, error) {
 	if pt != StrT {
 		return nil, fmt.Errorf(
@@ -446,6 +483,7 @@ func (pt *PrimitiveType) genLen() (*FunctionT, error) {
 		},
 	}, nil
 }
+
 func (pt *PrimitiveType) genString() *FunctionT {
 	return &FunctionT{
 		Name:       "string",
@@ -480,7 +518,6 @@ var (
 	TypeRefT = &PrimitiveType{Name: "typeRef"}
 	SelfT    = &TypeParamT{Name: "Self"}
 	AnyT     = &PrimitiveType{Name: "any"}
-	ErrorT   = &ErrorType{}
 
 	printTp = &TypeParamT{Name: "T", Bound: StringableI}
 	PrintT  = &FunctionT{
@@ -536,12 +573,29 @@ func (it *InterfaceT) GetMethod(n string) (*FunctionT, error) {
 }
 
 var (
+	ErrorI = &InterfaceT{
+		Name:  "Error",
+		Layer: Builtin,
+		State: Resolved,
+		Methods: map[string]*FunctionT{
+			"error": {
+				Name:       "error",
+				ReturnType: StrT,
+				Layer:      Builtin,
+				RState:     Resolved,
+				Params: []FParam{
+					{Name: "self", Type: SelfT},
+				},
+			},
+		},
+	}
 	StringableI = &InterfaceT{
 		Name:  "Stringable",
 		Layer: Builtin,
 		State: Resolved,
 		Methods: map[string]*FunctionT{
-			"string": {Name: "string",
+			"string": {
+				Name:       "string",
 				ReturnType: StrT,
 				Layer:      Builtin,
 				RState:     Resolved,
@@ -635,6 +689,7 @@ func (ft *FunctionT) getName() string {
 		ft.ReturnType.getName(),
 	)
 }
+
 func (ft *FunctionT) GetMethod(n string) (*FunctionT, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -650,6 +705,15 @@ var (
 	InvalidV = &InvalidValue{}
 	VoidV    = &VoidValue{}
 )
+
+type ModuleV struct {
+	Node *ast.ImportStmt
+	Name string
+	Mod  *Module
+}
+
+func (mv *ModuleV) val()          {}
+func (mv *ModuleV) GetType() Type { return VoidT }
 
 type LoopIter struct {
 	Container Value
@@ -676,14 +740,6 @@ type WithV struct {
 
 func (wv *WithV) val()          {}
 func (wv *WithV) GetType() Type { return wv.Type }
-
-type ErrorV struct {
-	Message string
-	Cause   *ErrorV
-}
-
-func (ev *ErrorV) val()          {}
-func (ev *ErrorV) GetType() Type { return ErrorT }
 
 type TryV struct {
 	Node  *ast.TryExpr
@@ -1093,12 +1149,13 @@ type Analyzer struct {
 	CurrentScope   *Scope
 	Errors         []errors.Error
 	functionBodies map[string]*FunctionBody
+	Mod            *Module
 }
 
 func (a *Analyzer) storeFunctionBody(typeName string, fb *FunctionBody) {
 	namespace := typeName
 	if namespace == "" {
-		namespace = "_"
+		namespace = a.Mod.Name
 	}
 	fullName := fmt.Sprintf("%s.%s", namespace, fb.Type.Name)
 	if _, ok := a.functionBodies[fullName]; ok {
@@ -1151,7 +1208,7 @@ func (a *Analyzer) addError(node ast.Node, e error) {
 	a.Errors = append(a.Errors, se)
 }
 
-func newUniverse() *Scope {
+func NewUniverse() *Scope {
 	u := &Scope{Name: "universe"}
 	u.Types = map[string]Type{
 		"int":        IntT,
@@ -1164,6 +1221,7 @@ func newUniverse() *Scope {
 		"Stringable": StringableI,
 		"Comparable": ComparableI,
 		"Sized":      SizedI,
+		"Error":      ErrorI,
 	}
 	u.Values = map[string]Value{
 		"print": PrintV,
@@ -1173,7 +1231,8 @@ func newUniverse() *Scope {
 }
 
 func (a *Analyzer) collectFunctionType(n *ast.FunctionStmt) {
-	ft := &FunctionT{Node: n, Name: n.Signature.Name, RState: Unresolved,
+	ft := &FunctionT{
+		Node: n, Name: n.Signature.Name, RState: Unresolved,
 		Layer: User,
 	}
 	fv := &FunctionV{Name: ft.Name, Type: ft}
@@ -1182,6 +1241,9 @@ func (a *Analyzer) collectFunctionType(n *ast.FunctionStmt) {
 	}
 	if err := a.CurrentScope.declareValue(fv.Name, fv); err != nil {
 		a.addError(n, err)
+	}
+	if n.IsPublic {
+		a.Mod.Exports[ft.Name] = true
 	}
 }
 
@@ -1195,6 +1257,9 @@ func (a *Analyzer) collectStructType(st *ast.StructType, stmt *ast.TypeDeclStmt)
 	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
 		a.addError(stmt, err)
 	}
+	if stmt.IsPublic {
+		a.Mod.Exports[stmt.Name] = true
+	}
 }
 
 func (a *Analyzer) collectEnumT(et *ast.EnumType, stmt *ast.TypeDeclStmt) {
@@ -1207,6 +1272,9 @@ func (a *Analyzer) collectEnumT(et *ast.EnumType, stmt *ast.TypeDeclStmt) {
 	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
 		a.addError(stmt, err)
 	}
+	if stmt.IsPublic {
+		a.Mod.Exports[stmt.Name] = true
+	}
 }
 
 func (a *Analyzer) collectInterfaceType(def *ast.InterfaceType, stmt *ast.TypeDeclStmt) {
@@ -1218,6 +1286,9 @@ func (a *Analyzer) collectInterfaceType(def *ast.InterfaceType, stmt *ast.TypeDe
 	}
 	if err := a.CurrentScope.declareValue(v.Name, v); err != nil {
 		a.addError(stmt, err)
+	}
+	if stmt.IsPublic {
+		a.Mod.Exports[stmt.Name] = true
 	}
 }
 
@@ -1285,7 +1356,6 @@ func (a *Analyzer) resolveTypeParams(
 		}
 		ft.TypeParams = append(ft.TypeParams, tpt)
 	}
-
 }
 
 func (a *Analyzer) resolveFunctionT(t *FunctionT) {
@@ -1340,6 +1410,20 @@ func (a *Analyzer) resolveNamedType(node *ast.NamedType) Type {
 		}
 		return &MaybeT{ElemType: a.resolveType(node.Args[0])}
 	default:
+		if len(node.Path) > 0 {
+			v, err := a.CurrentScope.lookupValue(node.Path[0])
+			mv, ok := v.(*ModuleV)
+			if err != nil || !ok {
+				a.errorF(node, "`%s` is not a module", node.Path[0])
+				return InvalidT
+			}
+			t, ok := mv.Mod.Scope.Types[node.Name]
+			if !ok || !mv.Mod.Exports[node.Name] {
+				a.errorF(node, "module `%s` has no public type `%s`", mv.Name, node.Name)
+				return InvalidT
+			}
+			return t
+		}
 		rt, err := a.CurrentScope.lookupType(node.Name)
 		if err != nil {
 			a.addError(node, err)
@@ -1481,6 +1565,10 @@ func (a *Analyzer) pass2() {
 }
 
 func (a *Analyzer) requireValue(node ast.Node, v Value) bool {
+	if mod, isMod := v.(*ModuleV); isMod {
+		a.errorF(node, "`%s` is a module, not a value", mod.Name)
+		return false
+	}
 	if v.GetType() == VoidT {
 		a.errorF(node, "expression has no value (type `void`) and cannot be used here")
 		return false
@@ -1491,7 +1579,11 @@ func (a *Analyzer) requireValue(node ast.Node, v Value) bool {
 func (a *Analyzer) checkReturn(
 	fb *FunctionBody, node ast.Node, v Value,
 ) *ReturnStatement {
+	rt := &ReturnStatement{Node: node, Value: v}
 	switch {
+	case v.GetType() == InvalidT:
+		// error already reported
+		return rt
 	case fb.Type.ReturnType != VoidT && v == nil:
 		a.errorF(node,
 			"function `%s` must return `%s`", fb.Type.Name, fb.Type.ReturnType.getName())
@@ -1500,7 +1592,7 @@ func (a *Analyzer) checkReturn(
 			a.addError(node, err)
 		}
 	}
-	return &ReturnStatement{Node: node, Value: v}
+	return rt
 }
 
 func (a *Analyzer) resolveReturnStmt(
@@ -1987,12 +2079,13 @@ func (a *Analyzer) resolveBody(
 	switch t := body.(type) {
 	case *ast.BlockExpr:
 		a.resolveStmts(fb, fb.Body, t.Statements)
-		if ft.ReturnType != VoidT && !terminates(fb.Body) {
-			a.errorF(body, "function `%s` must return `%s` on every path",
-				ft.getName(), ft.ReturnType.getName())
-		}
 	default:
 		a.resolveFunctionBodyExpr(fb, t)
+	}
+
+	if ft.ReturnType != VoidT && blockExit(fb.Body) != ExitFunc {
+		a.errorF(body, "function `%s` must return `%s` on every path",
+			ft.getName(), ft.ReturnType.getName())
 	}
 
 	return fb
@@ -2010,44 +2103,6 @@ func (a *Analyzer) resolveFunctionBody(t *FunctionT) {
 
 	fb := a.resolveBody(t, stmt.Body)
 	a.storeFunctionBody("", fb)
-}
-
-func terminates(b *Block) bool {
-	return slices.ContainsFunc(b.Statements, stmtTerminates)
-}
-
-func valueTerminates(v Value) bool {
-	switch t := v.(type) {
-	case *If:
-		return t.Else != nil && terminates(t.Then) && terminates(t.Else)
-	case *Switch:
-		if len(t.Arms) < 1 {
-			return false
-		}
-		for _, a := range t.Arms {
-			if a.IsDefault {
-				return true
-			}
-			if blockExit(a.Body) != ExitFunc {
-				return false
-			}
-		}
-	}
-	return false
-}
-
-func stmtTerminates(stmt Statement) bool {
-	switch t := stmt.(type) {
-	case *ReturnStatement:
-		return true
-	case *ExpressionStatement:
-		return valueTerminates(t.Value)
-	case *YieldStmt:
-		return valueTerminates(t.Value)
-	case *VariableStmt:
-		return valueTerminates(t.Value.Value)
-	}
-	return false
 }
 
 func (a *Analyzer) pass4() {
@@ -2180,6 +2235,9 @@ func (a *Analyzer) resolveConstant(stmt *ast.VarStmt) {
 	if err := a.CurrentScope.declareValue(c.Name, c); err != nil {
 		a.addError(stmt, err)
 	}
+	if stmt.IsPublic {
+		a.Mod.Exports[stmt.Name.Literal] = true
+	}
 }
 
 func (a *Analyzer) resolveImplDecl(node *ast.ImplDeclStmt) {
@@ -2242,20 +2300,51 @@ func (a *Analyzer) pass3(prog *ast.Program) {
 	}
 }
 
-func (a *Analyzer) Run(prog *ast.Program) {
+func joinPath(path []lexer.Token) string {
+	parts := make([]string, len(path))
+	for i, t := range path {
+		parts[i] = t.Literal
+	}
+	return strings.Join(parts, "::")
+}
+
+func (a *Analyzer) pass0(prog *ast.Program, imports map[string]*Module) {
+	for _, s := range prog.Statements {
+		imp, ok := s.(*ast.ImportStmt)
+		if !ok {
+			continue
+		}
+		m := imports[joinPath(imp.Path)]
+		if m == nil {
+			continue // the loader already reported the error
+		}
+		name := imp.Path[len(imp.Path)-1].Literal
+		if err := a.Package.declareValue(name, &ModuleV{Node: imp, Name: name, Mod: m}); err != nil {
+			a.addError(imp, err)
+		}
+	}
+}
+
+func (a *Analyzer) Run(prog *ast.Program, imports map[string]*Module) {
+	a.pass0(prog, imports)
 	a.pass1(prog) // collect top-level function and type names
 	a.pass2()     // resolve function and method types
 	a.pass3(prog) // resolve top-level vars and impl blocks
 	a.pass4()     // resolve function and method bodies
 }
 
-func NewAnalyzer() *Analyzer {
-	universe := newUniverse()
+func NewAnalyzer(universe *Scope, name string) *Analyzer {
 	pkg := newScope(universe, "package")
 	a := &Analyzer{
 		Universe:     universe,
 		Package:      pkg,
 		CurrentScope: pkg,
+	}
+	a.Mod = &Module{
+		Name:    name,
+		Scope:   pkg,
+		Exports: map[string]bool{},
+		Bodies:  a.functionBodies,
 	}
 	a.functionBodies = map[string]*FunctionBody{}
 	return a
@@ -2560,7 +2649,6 @@ func (a *Analyzer) resolveStructConstruction(
 			return InvalidV
 		}
 		if argV == InvalidV {
-			a.errorF(arg, "unknown expression `%T`", arg.Value)
 			return InvalidV
 		}
 		if err := identical(f.Type, argV.GetType()); err != nil {
@@ -2768,9 +2856,24 @@ func (a *Analyzer) resolveCopyExpr(expr *ast.CopyExpr, fb *FunctionBody) Value {
 	return cv
 }
 
+func (a *Analyzer) resolveModuleMember(m *ModuleV, expr *ast.MemberExpr) Value {
+	v, ok := m.Mod.Scope.Values[expr.Member]
+	if !ok {
+		a.errorF(expr, "module `%s` has no member `%s`", m.Name, expr.Member)
+		return InvalidV
+	}
+	if !m.Mod.Exports[expr.Member] {
+		a.errorF(expr, "`%s.%s` is not public", m.Name, expr.Member)
+		return InvalidV
+	}
+	return v
+}
+
 func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Value {
 	container := a.resolveExpr(expr.Container, fb, nil)
 	switch t := container.(type) {
+	case *ModuleV:
+		return a.resolveModuleMember(t, expr)
 	case *Binding:
 		switch c := t.Case.(type) {
 		case *VariantV:
@@ -2782,9 +2885,6 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Val
 			} else {
 				return &FieldAccess{Container: t, Index: idx, Type: field.Type}
 			}
-		default:
-			a.errorF(expr.Container, "`%s` value has no fields", t.GetType().getName())
-			return InvalidV
 		}
 	case *EnumV:
 		enumT := t.Type
@@ -3180,7 +3280,7 @@ func (a *Analyzer) resolveTryExpr(
 			a.errorF(expr, "cannot bind `None` to `%s`", expr.ErrName)
 			return InvalidV
 		}
-		cb := &Binding{Node: expr, Name: expr.ErrName, Type: ErrorT}
+		cb := &Binding{Node: expr, Name: expr.ErrName, Type: ErrorI}
 		tv.Err = cb
 		if err := a.CurrentScope.declareValue(cb.Name, cb); err != nil {
 			a.addError(expr, err)

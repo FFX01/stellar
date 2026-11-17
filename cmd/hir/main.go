@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"stellar/internal/hir"
-	"stellar/internal/lexer"
-	"stellar/internal/parser"
+	"stellar/internal/loader"
+	"strings"
 )
 
 func main() {
@@ -14,38 +15,27 @@ func main() {
 		log.Fatal("No file provided")
 	}
 
-	filePath := os.Args[1]
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		log.Fatal("File does not exist")
+	path := os.Args[1]
+	root := filepath.Dir(path)
+	ld := loader.New(root)
+	if _, err := ld.Load(path, nil); err != nil {
+		log.Fatal(err)
+	}
+	for _, e := range ld.Errors {
+		fmt.Println(e)
 	}
 
-	lexer := lexer.NewLexer(string(content))
-	tokens := lexer.Run()
-	lexerErrors := lexer.Errors()
-	if len(lexerErrors) > 0 {
-		for _, e := range lexerErrors {
-			fmt.Println(e.Message)
+	universe := hir.NewUniverse()
+	done := map[*loader.Module]*hir.Module{}
+	for _, lm := range ld.Order {
+		deps := map[string]*hir.Module{}
+		for key, dep := range lm.Imports {
+			deps[key] = done[dep]
 		}
-		log.Fatal("Stoping due to lexer errors.")
+		a := hir.NewAnalyzer(universe, strings.Join(lm.Path, "::"))
+		a.Run(lm.Program, deps)
+		done[lm] = a.Mod
+		fmt.Println("==", lm.File)
+		a.Dump()
 	}
-
-	p := parser.NewParser(tokens)
-	program := p.Parse()
-	if p.HasErrors() {
-		p.PrintErrors()
-		log.Fatal("Parser errors, stopping...")
-	}
-
-	a := hir.NewAnalyzer()
-	a.Run(program)
-
-	// file, err := os.Create("log.txt")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer file.Close()
-	// writer := bufio.NewWriter(os.Stdout)
-	a.Dump()
-	// writer.Flush()
 }

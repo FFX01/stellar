@@ -1,5 +1,5 @@
-import std::errors;
-import std::log;
+import local::errors;
+import local::log;
 
 type State struct {
     todos: []Todo
@@ -28,44 +28,59 @@ fn addTodo(s: State, t: Todo) -> State {
     return s.with(todos=[...s.todos, t]);
 }
 
-fn getTodo(s: State, id: int) -> Todo! {
+fn getTodo(s: State, id: int) -> Todo? {
     return s.todos.find(fn(t: Todo) -> bool: t.id == id);
 }
 
 fn completeTodo(s: State, id: int) -> State! {
     var todo = try getTodo(s, id) else {
-        return errors.ErrF("Todo with id: {} not found.", id);
+        return errors.errF("Todo with id: {} not found.", [id]);
+    }
+    mut idx = -1;
+    for i, t in s.todos {
+        if t == todo {
+            idx = i;
+        }
     }
     todo = todo.with(status=Status.Done);
     var state = s.with(
-        todos=s.todos.take(idx) + [todo] + s.todos.skip(idx + 1)
+        todos=[...s.todos.head(idx), todo, ...s.todos.tail(idx + 1)]
     );
     return Ok(state);
 }
 
 fn markTodoInProgress(s: State, id: int) -> State! {
     var todo = try getTodo(s, id) else {
-        return errors.ErrF("Todo with id: {} not found.", id);
+        return errors.errF("Todo with id: {} not found.", [id]);
+    }
+    mut idx = -1;
+    for i,t in s.todos {
+        if t == todo {
+            idx = i;
+        }
+    }
+    if idx < 0 {
+        return errors.errF("Todo with id: {} not found.", [id]);
     }
     todo = todo.with(status=Status.Done);
     return Ok(
         s.with(
-            todos=s.todos[:idx] + [todo] + s.todos[idx+1:]
+            todos=[...s.todos[:idx], todo, ...s.todos[idx+1:]]
         )
     );
 }
 
 fn deleteTodo(s: State, id: int) -> State! {
     var idx = for i, t in s.todos {
-        if t.id == id {
-            >> 1;
+        >> if t.id == id {
+            >> i;
         }
     }
     if idx.len() == 0 {
-        return errors.ErrF("Todo with id {} not found.", id);
+        return errors.errF("Todo with id {} not found.", [id]);
     }
     var newS = s.with(
-        todos=s.todos[:idx[0]] + s.todos[idx[0]+1:]
+        todos=[...s.todos[:idx[0]], ...s.todos[idx[0]+1:]]
     );
     return Ok(newS);
 }
@@ -79,13 +94,13 @@ type Action enum {
 
 fn update(s: State, action: Action) -> State {
     var newS = switch action {
-        Add => addTodo(
+        Action.Add as a => addTodo(
             s, 
-            Todo(id=s.nextId(), title=action.title, status=Status.InProgress)
+            Todo(id=s.nextId(), title=a.title, status=Status.InProgress)
         ),
-        Complete => completeTodo(s, action.id),
-        Uncomplete => markTodoInProgress(s, action.id),
-        Delete => deleteTodo(s, action.id)
+        Action.Complete as c => completeTodo(s, c.id),
+        Action.UnComplete as u => markTodoInProgress(s, u.id),
+        Action.Delete as d => deleteTodo(s, d.id)
     }
     if newS.error() {
         log.error(newS);
@@ -98,9 +113,10 @@ fn main() {
     var s = State(todos=[]);
 
     for {
-        var args = io.stdin.input().split(" ");
+        // var args = io.stdin.input().split(" ");
+        var args = ["add", "new title"];  // once i/o is implemented, use above line
         var action = switch args[0] {
-            "add" => Action.Add(args[1]),
+            "add" => Action.Add(title=args[1]),
             "q" => { break; }
         }
     }

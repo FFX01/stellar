@@ -260,8 +260,7 @@ impl GenericLt {
 }
 
 fn errGenericMethodForBound() -> GenericLt {
-    // ERR (next line): a generic method does not satisfy `Ordered.lt`
-    return min(GenericLt(n=1), GenericLt(n=2));
+    return min(GenericLt(n=1), GenericLt(n=2)); // ERR: a generic method does not satisfy `Ordered.lt`
 }
 
 fn errBoundInBody[T](x: T) -> str {

@@ -1,0 +1,3 @@
+pub fn error[T: Stringable](val: T) {
+    print(val.string());
+}

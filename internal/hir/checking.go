@@ -77,11 +77,18 @@ func identical(a, b Type) error {
 		}
 		return nil
 	case *ResultT:
-		bt, ok := b.(*ResultT)
-		if !ok {
+		switch bt := b.(type) {
+		case *ResultT:
+			return identical(at.ElemType, bt.ElemType)
+		case *StructT:
+			if err := satisfies(bt, ErrorI); err != nil {
+				return err
+			} else {
+				return nil
+			}
+		default:
 			return defaultErr
 		}
-		return identical(at.ElemType, bt.ElemType)
 	case *MaybeT:
 		bt, ok := b.(*MaybeT)
 		if !ok {

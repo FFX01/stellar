@@ -1,0 +1,11 @@
+pub type error struct {
+    pub msg: str
+}
+impl error {
+    fn error(self) -> str: self.msg;
+}
+
+
+pub fn errF[T: Stringable](msg: str, args: []T) -> error! {
+    return Err(error(msg=msg));
+}

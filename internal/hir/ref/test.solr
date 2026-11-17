@@ -1,35 +1,12 @@
-type Shape enum {
-    Square(side: float),
-    Rectange(height: float, width: float),
-    Circle(radius: float)
+type State struct {
+    values: []int
 }
-impl Shape {
-    fn dump(self) -> str {
-        return switch self {
-            is Shape.Square => "square",
-            is Shape.Rectangle => "rectangle",
-            is Shape.Circle => "circle"
-        }
+impl State {
+    fn len(self) -> int {
+        return self.values.len();
     }
-}
-
-fn area(s: Shape) -> float {
-    return switch s {
-        Shape.Square as sh => sh.side * sh.side,
-        Shape.Recangle as sh => sh.height * sh.width,
-        Shape.Circle as sh => 3.14 * (sh.radius * sh.radius)
-    }
-}
-
-fn circumfrence(c: Shape.Circle) float {
-    return 2 * 3.14 * c.radius;
 }
 
 fn main() {
-    var myShape = Shape.Rectangle(height=10, width=20);
-    var a = area(myShape);
-
-    var myCircle = Shape.circle(radius=5);
-    var circ = circumfrence(myCircle);
+    var s: Sized = State(values=[1, 2, 3]);
 }
-

@@ -4,5 +4,7 @@ fn mul(a: int, b: int) -> int {
     return a * b;
 }
 
-var addResult: int = add(1, 2);
+fn main() {
+    var addResult: int = add(1, 2);
+}
 
