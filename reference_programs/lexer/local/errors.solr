@@ -6,6 +6,6 @@ impl error {
 }
 
 
-pub fn errF[T: Stringable](msg: str, args: []T) -> error! {
-    return Err(error(msg=msg));
+pub fn errF[T: Stringable](msg: str, args: []T) -> Error {
+    return error(msg=msg);
 }

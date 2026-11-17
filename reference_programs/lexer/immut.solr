@@ -11,6 +11,7 @@ impl State {
         }
         return max(self.todos.map(fn(t: Todo) -> int: t.id)) + 1;
     }
+    fn string(self) -> str: "State";
 }
 
 type Todo struct {
@@ -34,7 +35,7 @@ fn getTodo(s: State, id: int) -> Todo? {
 
 fn completeTodo(s: State, id: int) -> State! {
     var todo = try getTodo(s, id) else {
-        return errors.errF("Todo with id: {} not found.", [id]);
+        return Err(errors.errF("Todo with id: {} not found.", [id]));
     }
     mut idx = -1;
     for i, t in s.todos {
@@ -51,7 +52,7 @@ fn completeTodo(s: State, id: int) -> State! {
 
 fn markTodoInProgress(s: State, id: int) -> State! {
     var todo = try getTodo(s, id) else {
-        return errors.errF("Todo with id: {} not found.", [id]);
+        return Err(errors.errF("Todo with id: {} not found.", [id]));
     }
     mut idx = -1;
     for i,t in s.todos {
@@ -60,7 +61,7 @@ fn markTodoInProgress(s: State, id: int) -> State! {
         }
     }
     if idx < 0 {
-        return errors.errF("Todo with id: {} not found.", [id]);
+        return Err(errors.errF("Todo with id: {} not found.", [id]));
     }
     todo = todo.with(status=Status.Done);
     return Ok(
@@ -74,10 +75,10 @@ fn deleteTodo(s: State, id: int) -> State! {
     var idx = for i, t in s.todos {
         >> if t.id == id {
             >> i;
-        }
+        } else { continue; }
     }
     if idx.len() == 0 {
-        return errors.errF("Todo with id {} not found.", [id]);
+        return Err(errors.errF("Todo with id {} not found.", [id]));
     }
     var newS = s.with(
         todos=[...s.todos[:idx[0]], ...s.todos[idx[0]+1:]]

@@ -1695,7 +1695,9 @@ func (a *Analyzer) resolveIf(
 		ifV.Then = &Block{Type: VoidT}
 	}
 
-	ifV.Else = a.resolveBranch(fb, expr.Else, asValue, false)
+	if expr.Else != nil {
+		ifV.Else = a.resolveBranch(fb, expr.Else, asValue, false)
+	}
 
 	if asValue {
 		ifV.Type = a.getIfType(ifV)
@@ -1705,6 +1707,9 @@ func (a *Analyzer) resolveIf(
 }
 
 func (a *Analyzer) getIfType(i *If) Type {
+	if i.Else == nil {
+		return VoidT
+	}
 	tt, et := i.Then.Type, i.Else.Type
 	switch {
 	case tt == InvalidT || et == InvalidT:
@@ -1895,6 +1900,7 @@ func (a *Analyzer) resolveForInExpr(
 			a.errorF(expr, "a `for` used as a value needs `>>` in its body")
 			return InvalidV
 		case l.Body.Type == InvalidT:
+			a.errorF(expr, "loop did not produce a valid type; ensure all paths yield a value or continue the loop")
 			return InvalidV
 		case l.Body.Type == VoidT:
 			a.errorF(expr, "`>>` in a `for` cannot give a `void` value")

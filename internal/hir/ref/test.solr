@@ -1,12 +1,14 @@
-type State struct {
-    values: []int
-}
-impl State {
-    fn len(self) -> int {
-        return self.values.len();
-    }
+type Todo struct {
+    name: str
 }
 
+
 fn main() {
-    var s: Sized = State(values=[1, 2, 3]);
+    var todos = [Todo(name="1"), Todo(name="2")];
+    var name = "2";
+    var idx = for i, t in todos {
+        >> if t.name == name {
+            >> i;
+        } 
+    }
 }
