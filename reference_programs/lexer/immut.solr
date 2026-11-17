@@ -95,10 +95,10 @@ type Action enum {
 
 fn update(s: State, action: Action) -> State {
     var newS = switch action {
-        Action.Add as a => addTodo(
+        Action.Add as a => Ok(addTodo(
             s, 
             Todo(id=s.nextId(), title=a.title, status=Status.InProgress)
-        ),
+        )),
         Action.Complete as c => completeTodo(s, c.id),
         Action.UnComplete as u => markTodoInProgress(s, u.id),
         Action.Delete as d => deleteTodo(s, d.id)
@@ -107,7 +107,7 @@ fn update(s: State, action: Action) -> State {
         log.error(newS);
         return s;
     }
-    return newS;
+    return newS.expect("Something went terribly wrong");
 }
 
 fn main() {

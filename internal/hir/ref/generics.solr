@@ -54,7 +54,7 @@ fn firstWrapped[T](x: T) -> T: first(wrap(x));
 fn twice[T](x: T) -> []T: concat(wrap(x), wrap(x));
 
 // recursion with the same T
-fn last[T](xs: []T) -> T: if len(xs) == 1 { >> xs[0]; } else last(rest(xs));
+fn last[T](xs: []T) -> T: if xs.len() == 1 { >> xs[0]; } else last(rest(xs));
 
 // calls with each kind of type argument
 fn inference() {
@@ -139,7 +139,7 @@ fn apply[T, U](x: T, f: fn(T) -> U) -> U: f(x);
 fn compose[A, B, C](x: A, f: fn(A) -> B, g: fn(B) -> C) -> C: g(f(x));
 
 fn higherOrder() {
-    var n: int = apply("abc", fn(s: str) -> int: len(s));
+    var n: int = apply("abc", fn(s: str) -> int: s.len());
     var s: str = apply(1, fn(i: int) -> str: "x");
     var b: bool = compose(1, fn(i: int) -> str: "x", fn(s: str) -> bool: true);
 }
@@ -152,7 +152,7 @@ fn wrapAll[T](x: T) -> [][]T: wrap(apply(x, fn(v: T) -> []T: [v, v]));
 // ---------------------------------------------------------------------------
 
 fn head[T](xs: []T) -> T? {
-    if len(xs) == 0 {
+    if xs.len() == 0 {
         return None();
     }
     return Some(xs[0]);

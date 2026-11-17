@@ -202,7 +202,52 @@ func (rt *ResultT) typ()                      {}
 func (rt *ResultT) GetState() ResolutionState { return Resolved }
 func (rt *ResultT) getName() string           { return "Result" }
 func (rt *ResultT) GetMethod(n string) (*FunctionT, error) {
+	switch n {
+	case "error":
+		return rt.genError()
+	case "string":
+		return rt.genString()
+	case "expect":
+		return rt.genExpect()
+	}
 	return nil, fmt.Errorf("`Result` has no method `%s`", n)
+}
+func (rt *ResultT) genExpect() (*FunctionT, error) {
+	ft := &FunctionT{
+		Name:       "expect",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: rt.ElemType,
+		Params: []FParam{
+			{Name: "self", Type: rt},
+			{Name: "msg", Type: StrT},
+		},
+	}
+	return ft, nil
+}
+func (rt *ResultT) genString() (*FunctionT, error) {
+	ft := &FunctionT{
+		Name:       "string",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: StrT,
+		Params: []FParam{
+			{Name: "self", Type: rt},
+		},
+	}
+	return ft, nil
+}
+func (rt *ResultT) genError() (*FunctionT, error) {
+	ft := &FunctionT{
+		Name:       "error",
+		Layer:      Builtin,
+		RState:     Resolved,
+		ReturnType: BoolT,
+		Params: []FParam{
+			{Name: "self", Type: rt},
+		},
+	}
+	return ft, nil
 }
 
 type SliceT struct {
@@ -2946,6 +2991,22 @@ func (a *Analyzer) resolveMemberExpr(expr *ast.MemberExpr, fb *FunctionBody) Val
 			return InvalidV
 		}
 	case *TypeParamT:
+		meth, err := t.GetMethod(expr.Member)
+		if err != nil {
+			a.addError(expr, err)
+			return InvalidV
+		}
+		meth = subGeneric(meth, map[*TypeParamT]Type{SelfT: t}).(*FunctionT)
+		return &MethodV{Name: meth.Name, Type: meth, Receiver: container}
+	case *ResultT:
+		meth, err := t.GetMethod(expr.Member)
+		if err != nil {
+			a.addError(expr, err)
+			return InvalidV
+		}
+		meth = subGeneric(meth, map[*TypeParamT]Type{SelfT: t}).(*FunctionT)
+		return &MethodV{Name: meth.Name, Type: meth, Receiver: container}
+	case *PrimitiveType:
 		meth, err := t.GetMethod(expr.Member)
 		if err != nil {
 			a.addError(expr, err)
