@@ -842,6 +842,9 @@ func (p *Parser) parseImplDeclStmt() ast.Statement {
 func (p *Parser) parseTypeDecl(pub bool) ast.Statement {
 	tok := p.expect(lexer.TYPE)
 	ident := p.expect(lexer.IDENT)
+	if p.check(lexer.LBRACK) {
+		p.error(tok, "only functions and methods can be generic")
+	}
 	if p.check(lexer.ASSIGN) {
 		n := &ast.TypeAliasStmt{
 			Token:    tok,

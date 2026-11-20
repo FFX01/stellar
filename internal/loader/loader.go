@@ -14,6 +14,7 @@ import (
 type Module struct {
 	Path    []string
 	File    string
+	Name    string
 	Program *ast.Program
 	Imports map[string]*Module
 }
@@ -58,6 +59,9 @@ func (l *Loader) Load(file string, path []string) (*Module, error) {
 	}
 
 	m := &Module{Path: path, File: file, Program: prog, Imports: map[string]*Module{}}
+	if len(path) > 0 {
+		m.Name = path[len(path)-1]
+	}
 	for _, s := range prog.Statements {
 		imp, ok := s.(*ast.ImportStmt)
 		if !ok {
