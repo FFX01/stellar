@@ -3,14 +3,40 @@ package hir2
 
 import (
 	"fmt"
+	"io"
 	"stellar/internal/ast"
 	"stellar/internal/loader"
+	"strconv"
+	"strings"
 )
 
+var stringInterner *StringInterner
+var typeInterner *TypeInterner
+
 type SymbolID uint32
+
 type TypeID uint32
+
+func (tid TypeID) LitterDump(w io.Writer) {
+	typ := typeInterner.Types[tid]
+	name := stringInterner.Get(typ.Name)
+	out := fmt.Sprintf(" {%d: %s}", tid, name)
+	w.Write([]byte(out))
+}
+
 type ModID uint32
 type StringID uint32
+
+func (sid StringID) LitterDump(w io.Writer) {
+	name := stringInterner.Get(sid)
+	out := fmt.Sprintf(
+		" {%d: %s}",
+		sid,
+		name,
+	)
+	w.Write([]byte(out))
+}
+
 type ScopeID uint32
 type NodeID uint32
 
@@ -28,6 +54,15 @@ const (
 
 type SymbolKind int
 
+func (sk SymbolKind) LitterDump(w io.Writer) {
+	out := fmt.Sprintf(
+		" {%d: %s}",
+		sk,
+		SKString[sk],
+	)
+	w.Write([]byte(out))
+}
+
 const (
 	SKInvalid = iota
 	SKType
@@ -38,15 +73,43 @@ const (
 	SKParam
 )
 
+var SKString = map[SymbolKind]string{
+	SKInvalid: "invalid",
+	SKType:    "type",
+	SKModule:  "module",
+	SKFunc:    "function",
+	SKVar:     "variable",
+	SKConst:   "constant",
+	SKParam:   "Param",
+}
+
 type TypeKind int
 
+func (tk TypeKind) LitterDump(w io.Writer) {
+	name := TKString[tk]
+	w.Write([]byte(" " + name))
+}
+
 const (
-	TKStruct = iota + 1
+	TKInvalid = iota
+	TKStruct
 	TKEnum
 	TKInterface
 	TKAlias
 	TKPrimitive
+	TKSlice
+	TKFunc
 )
+
+var TKString = map[TypeKind]string{
+	TKInvalid:   "invalid",
+	TKStruct:    "struct",
+	TKEnum:      "enum",
+	TKInterface: "interface",
+	TKAlias:     "alias",
+	TKPrimitive: "primitive",
+	TKSlice:     "slice",
+}
 
 type Field struct {
 	Name       StringID
@@ -69,12 +132,32 @@ type Symbol struct {
 	Node  NodeID
 }
 
+type Variant struct {
+	Name   StringID
+	Tag    uint32
+	Fields FieldRange
+}
+
+type Param struct {
+	Name StringID
+	Type TypeID
+}
+
+type ParamRange struct {
+	Start  uint32
+	Length uint32
+}
+
 type Type struct {
-	ID       TypeID
-	Name     StringID
-	Kind     TypeKind
-	AliasFor TypeID
-	Fields   FieldRange
+	ID         TypeID
+	Name       StringID
+	Kind       TypeKind
+	AliasFor   TypeID
+	Fields     FieldRange
+	Params     ParamRange
+	ElemType   TypeID
+	Variants   []Variant
+	ReturnType TypeID
 }
 
 type TypeInterner struct {
@@ -82,8 +165,8 @@ type TypeInterner struct {
 	ByKey map[StringID]TypeID
 }
 
-func (ti *TypeInterner) Get(name StringID) *Type {
-	id := ti.ByKey[name]
+func (ti *TypeInterner) Get(key StringID) *Type {
+	id := ti.ByKey[key]
 	return ti.Types[id]
 }
 
@@ -155,6 +238,16 @@ type Scope struct {
 	Symbols  map[StringID]SymbolID
 }
 
+func (s *Scope) lookup(key StringID) (SymbolID, error) {
+	if id, ok := s.Symbols[key]; ok {
+		return id, nil
+	}
+	if s.Parent != nil {
+		return s.Parent.lookup(key)
+	}
+	return 0, fmt.Errorf("not found")
+}
+
 func newScope(name string, parent *Scope) *Scope {
 	sc := &Scope{
 		Name: name,
@@ -174,7 +267,7 @@ func newUniverse() *Scope {
 
 func (s *Scope) declareSymbol(name StringID, id SymbolID) error {
 	if _, ok := s.Symbols[name]; ok {
-		return fmt.Errorf("`%s` already declared in this scope", name)
+		return fmt.Errorf("`%d` already declared in this scope", name)
 	}
 	s.Symbols[name] = id
 	return nil
@@ -206,10 +299,36 @@ type Context struct {
 	Nodes        []ast.Node
 	Symbols      []Symbol
 	Fields       []Field
+	Params       []Param
+}
+
+func (c *Context) GetParams(pr ParamRange) []Param {
+	start := pr.Start
+	end := pr.Start + pr.Length
+	return c.Params[start:end]
+}
+
+func (c *Context) lookupType(key StringID) (TypeID, error) {
+	name := c.Strings.Get(key)
+	sid, err := c.CurrentScope.lookup(key)
+	if err != nil {
+		return 0, fmt.Errorf("type `%s` not found", name)
+	}
+	sym := c.Symbols[sid]
+	if sym.Kind != SKType {
+		return 0, fmt.Errorf(
+			"`%s` is not a type",
+			name,
+		)
+	}
+	return sym.Type, nil
 }
 
 func (c *Context) addField(f Field) {
 	c.Fields = append(c.Fields, f)
+}
+func (c *Context) addParam(p Param) {
+	c.Params = append(c.Params, p)
 }
 
 func (c *Context) diag(
@@ -245,12 +364,37 @@ func (c *Context) addSymbol(s Symbol) SymbolID {
 	return sid
 }
 
+func (c *Context) seedBuiltins() {
+	primitives := []string{
+		"str", "int", "float", "bool",
+	}
+	for _, name := range primitives {
+		t := &Type{
+			Name: c.Strings.intern(name),
+			Kind: TKPrimitive,
+		}
+		tid := c.Types.intern(t.Name, t)
+		sym := Symbol{
+			Scope: 0,
+			Kind:  SKType,
+			Name:  t.Name,
+			Type:  tid,
+		}
+		sid := c.addSymbol(sym)
+		if err := c.Universe.declareSymbol(sym.Name, sid); err != nil {
+			panic(err)
+		}
+	}
+}
+
 func NewContext(modules []*loader.Module) *Context {
 	c := &Context{Universe: newUniverse()}
 	c.CurrentScope = c.Universe
 
 	c.Types = NewTypeInterner()
 	c.Strings = NewStringInterner()
+	stringInterner = c.Strings
+	typeInterner = c.Types
 
 	errorT := &Type{
 		Name: c.Strings.intern("Error"),
@@ -265,6 +409,11 @@ func NewContext(modules []*loader.Module) *Context {
 		Kind: TKPrimitive,
 	}
 
+	invalidName := c.Strings.intern("invalid")
+	c.Types.intern(
+		invalidName,
+		&Type{Name: invalidName, Kind: TKInvalid},
+	)
 	errorID := c.Types.intern(errorT.Name, errorT)
 	c.Types.intern(voidT.Name, voidT)
 	c.Types.intern(neverT.Name, neverT)
@@ -292,6 +441,8 @@ func NewContext(modules []*loader.Module) *Context {
 		}
 		c.Modules = append(c.Modules, m)
 	}
+
+	c.seedBuiltins()
 	return c
 }
 
@@ -329,17 +480,140 @@ func (c *Context) collectTypeDecl(mod *Module, node *ast.TypeDeclStmt) {
 	}
 }
 
+func (c *Context) resolveNamedType(mod *Module, nt *ast.NamedType) TypeID {
+	nid := c.Strings.intern(nt.Name)
+	tid, err := c.lookupType(nid)
+	if err != nil {
+		c.diag(
+			mod,
+			nt,
+			"%s",
+			err.Error(),
+		)
+		return TypeInvalid
+	}
+	return tid
+}
+
+func (c *Context) resolveSliceType(
+	mod *Module, node *ast.SliceType,
+) TypeID {
+	elemTID := c.resolveTypeExpr(mod, node.ElementType)
+	key := fmt.Sprintf("[]%d", elemTID)
+	kid := c.Strings.intern(key)
+	tid := c.Types.intern(kid, &Type{
+		Name:     kid,
+		Kind:     TKSlice,
+		ElemType: elemTID,
+	})
+	return tid
+}
+
+func (c *Context) resolveFunctionSignature(
+	mod *Module, node *ast.FunctionSignature,
+) TypeID {
+	var paramNames []string
+	for _, p := range node.Parameters {
+		tid := c.resolveTypeExpr(mod, p.Type)
+		typ := c.Types.Types[tid]
+		n := strconv.Itoa(int(typ.Name))
+		paramNames = append(paramNames, n)
+	}
+	paramsString := strings.Join(paramNames, ",")
+	rt := c.resolveTypeExpr(mod, node.ReturnType)
+	rtString := strconv.Itoa(int(rt))
+	key := fmt.Sprintf(
+		"fn(%s)->%s",
+		paramsString,
+		rtString,
+	)
+	kid := c.Strings.intern(key)
+	tid := c.Types.intern(
+		kid,
+		&Type{Name: kid, Kind: TKFunc, ReturnType: rt},
+	)
+	return tid
+}
+
+func (c *Context) resolveTypeExpr(
+	mod *Module, node ast.Type,
+) TypeID {
+	switch t := node.(type) {
+	case *ast.SliceType:
+		return c.resolveSliceType(mod, t)
+	case *ast.NamedType:
+		return c.resolveNamedType(mod, t)
+	case *ast.FunctionSignature:
+		return c.resolveFunctionSignature(mod, t)
+	}
+	return TypeInvalid
+}
+
+func (c *Context) resolveFields(
+	fields []*ast.Field, mod *Module,
+) FieldRange {
+	fieldsStart := len(c.Fields)
+	fieldsLen := 0
+	for _, f := range fields {
+		fname := c.Strings.intern(f.Name)
+		tid := c.resolveTypeExpr(mod, f.Type)
+		c.addField(Field{Name: fname, Type: tid})
+		fieldsLen++
+	}
+	return FieldRange{Start: uint32(fieldsStart), Length: uint32(fieldsLen)}
+}
+
+func (c *Context) resolveParams(
+	params []*ast.Parameter, mod *Module,
+) ParamRange {
+	start := len(c.Params)
+	length := 0
+	for _, f := range params {
+		fname := c.Strings.intern(f.Name)
+		tid := c.resolveTypeExpr(mod, f.Type)
+		c.addParam(Param{Name: fname, Type: tid})
+		length++
+	}
+	return ParamRange{Start: uint32(start), Length: uint32(length)}
+}
+
+func (c *Context) pass2Types(sym Symbol) {
+	c.CurrentScope = c.GetScope(sym.Scope)
+	t := c.Types.Types[sym.Type]
+	switch t.Kind {
+	case TKStruct:
+		node := c.Nodes[sym.Node]
+		def := node.(*ast.TypeDeclStmt).Definition.(*ast.StructType)
+		t.Fields = c.resolveFields(def.Fields, c.Modules[sym.Mod])
+	case TKEnum:
+		node := c.Nodes[sym.Node]
+		def := node.(*ast.TypeDeclStmt).Definition.(*ast.EnumType)
+		for tag, v := range def.Members {
+			variant := Variant{
+				Name: c.Strings.intern(v.Name),
+				Tag:  uint32(tag),
+			}
+			variant.Fields = c.resolveFields(v.Fields, c.Modules[sym.Mod])
+			t.Variants = append(t.Variants, variant)
+		}
+	}
+}
+
+func (c *Context) pass2Funcs(sym Symbol) {
+	mod := c.Modules[sym.Mod]
+	node := c.Nodes[sym.Node]
+	def := node.(*ast.FunctionStmt)
+	tid := c.resolveTypeExpr(mod, def.Signature)
+	c.Symbols[sym.ID].Type = tid
+}
+
 func (c *Context) pass2() {
 	for _, sym := range c.Symbols {
-		t := c.Types.Types[sym.Type]
-		switch t.Kind {
-		case TKStruct:
-			node := c.Nodes[sym.Node]
-			def := node.(*ast.TypeDeclStmt).Definition.(*ast.StructType)
-			fieldsLen := 0
-			for _, f := range def.Fields {
-				fname := c.Strings.intern()
-			}
+		switch sym.Kind {
+		case SKType:
+			c.pass2Types(sym)
+		case SKFunc:
+			c.pass2Funcs(sym)
 		}
 	}
 }
@@ -393,4 +667,5 @@ func (c *Context) pass0() {
 func (c *Context) Run() {
 	c.pass0()
 	c.pass1()
+	c.pass2()
 }

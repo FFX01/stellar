@@ -10,9 +10,11 @@ import (
 
 func (c *Context) Dump() {
 	litter.Config.FieldExclusions = regexp.MustCompile(`^(Node)$`)
+	litter.Dump(c.Universe)
 	litter.Dump(c.Symbols)
 	litter.Dump(c.Types)
-	litter.Dump(c.Universe)
+	litter.Dump(c.Fields)
+	litter.Dump(c.Params)
 	if len(c.Diags) > 0 {
 		sorted := slices.Clone(c.Diags)
 		slices.SortFunc(sorted, func(a, b *Diag) int {

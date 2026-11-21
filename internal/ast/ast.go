@@ -780,6 +780,7 @@ type FunctionSignature struct {
 }
 
 func (f *FunctionSignature) TokenLiteral() string { return f.Token.Literal }
+func (f *FunctionSignature) typ()                 {}
 func (f *FunctionSignature) Pos() lexer.Position  { return f.Token.Position }
 func (f *FunctionSignature) String() string {
 	return fmt.Sprintf(
