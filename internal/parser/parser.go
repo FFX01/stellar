@@ -308,9 +308,26 @@ func (p *Parser) parseArgument() *ast.Argument {
 
 func (p *Parser) parseMemberExpr(left ast.Expression) ast.Expression {
 	op := p.expect(lexer.DOT)
+	if p.check(lexer.INT) {
+		return p.parseTupleAccessExpr(op, left)
+	}
 	n := &ast.MemberExpr{Token: op, Container: left}
 	n.Member = p.expect(lexer.IDENT).Literal
 	return n
+}
+
+// parseTupleAccessExpr parses the index of `t.0`. The DOT is already consumed.
+// The index must be a decimal literal with no leading zeros, for example `0` or `12`.
+func (p *Parser) parseTupleAccessExpr(op lexer.Token, left ast.Expression) ast.Expression {
+	tok := p.expect(lexer.INT)
+	if len(tok.Literal) > 1 && tok.Literal[0] == '0' {
+		p.error(tok, "invalid tuple index: %s", tok.Literal)
+	}
+	index, err := strconv.Atoi(tok.Literal)
+	if err != nil {
+		p.error(tok, "invalid tuple index: %s", tok.Literal)
+	}
+	return &ast.TupleAccessExpr{Token: op, Container: left, Index: index}
 }
 
 func (p *Parser) parseMaybeExpr() ast.Expression {
@@ -367,6 +384,15 @@ func (p *Parser) parseSequenceLiteralExpr() ast.Expression {
 	return n
 }
 
+func (p *Parser) parseTupleLiteralExpr() ast.Expression {
+	tok := p.expect(lexer.HASH_LPAREN)
+	n := &ast.TupleLiteral{Token: tok}
+	n.Elements = parseList(p, parenList, func() ast.Expression {
+		return p.parseExpression(PLowest)
+	})
+	return n
+}
+
 func (p *Parser) parseNotExpr() ast.Expression {
 	tok := p.expect(lexer.NOT)
 	n := &ast.NotExpr{Token: tok}
@@ -415,6 +441,13 @@ func (p *Parser) parseSliceType() ast.Type {
 	return n
 }
 
+func (p *Parser) parseTupleType() ast.Type {
+	tok := p.expect(lexer.LPAREN)
+	n := &ast.TupleType{Token: tok}
+	n.ElementTypes = parseList(p, parenList, p.parseType)
+	return n
+}
+
 func (p *Parser) parseNamedType() ast.Type {
 	tok := p.expect(lexer.IDENT)
 	n := &ast.NamedType{Token: tok}
@@ -442,6 +475,8 @@ func (p *Parser) parseTypePrefix() ast.Type {
 	switch p.cur().Type {
 	case lexer.LBRACK:
 		n = p.parseSliceType()
+	case lexer.LPAREN:
+		n = p.parseTupleType()
 	case lexer.IDENT:
 		n = p.parseNamedType()
 	case lexer.FUNC:
@@ -555,6 +590,7 @@ func NewParser(input []lexer.Token) *Parser {
 	p.prefixFuncs[lexer.IDENT] = p.parseIdentifierExpr
 	p.prefixFuncs[lexer.LPAREN] = p.parseGroupingExpr
 	p.prefixFuncs[lexer.LBRACK] = p.parseSequenceLiteralExpr
+	p.prefixFuncs[lexer.HASH_LPAREN] = p.parseTupleLiteralExpr
 	p.prefixFuncs[lexer.STRING] = p.parseStringLiteralExpr
 	p.prefixFuncs[lexer.TRUE] = p.parseBoolLiteralExpr
 	p.prefixFuncs[lexer.FALSE] = p.parseBoolLiteralExpr

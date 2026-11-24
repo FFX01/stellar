@@ -18,6 +18,7 @@ const (
 	FLOAT        T_Token = "FLOAT"
 	ERR          T_Token = "ERR"
 	LPAREN       T_Token = "LPAREN"
+	HASH_LPAREN  T_Token = "HASH_LPAREN"
 	RPAREN       T_Token = "RPAREN"
 	LBRACK       T_Token = "LBRACK"
 	RBRACK       T_Token = "RBRACK"
@@ -157,6 +158,7 @@ type Lexer struct {
 	currentLine   int
 	currentColumn int
 	errors        []Error
+	prev          T_Token // type of the last token that Run emitted
 }
 
 func NewLexer(input string) *Lexer {
@@ -222,6 +224,15 @@ func (l *Lexer) nextToken() Token {
 	switch l.ch {
 	case '(':
 		t = Token{Type: LPAREN, Literal: string(l.ch), Position: pos}
+	case '#':
+		// `#(` opens a tuple literal. `#` is not valid alone.
+		if l.peek() == '(' {
+			t = Token{Type: HASH_LPAREN, Literal: "#(", Position: pos}
+			l.readChar()
+		} else {
+			t = Token{Type: ERR, Literal: string(l.ch), Position: pos}
+			l.error(pos, "Expected '(' after '#'")
+		}
 	case ')':
 		t = Token{Type: RPAREN, Literal: string(l.ch), Position: pos}
 	case '[':
@@ -354,7 +365,9 @@ func (l *Lexer) nextToken() Token {
 			return t
 		} else if isDigit(l.ch) {
 			t.Literal = l.readNumber()
-			if l.ch == '.' {
+			// A number after a DOT is a tuple index. It is always an INT, so
+			// `t.0.1` lexes as `t . 0 . 1` and not as `t . 0.1`.
+			if l.ch == '.' && l.prev != DOT {
 				if isDigit(l.peek()) {
 					l.readChar()
 					t.Type = FLOAT
@@ -450,6 +463,7 @@ func (l *Lexer) Run() []Token {
 	var out []Token
 	for {
 		t := l.nextToken()
+		l.prev = t.Type
 		out = append(out, t)
 		if t.Type == EOF {
 			break

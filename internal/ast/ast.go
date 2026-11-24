@@ -90,6 +90,34 @@ func (s *SequenceLiteral) String() string {
 	return fmt.Sprintf("SequenceLiteral (%s)", sliceToString(s.Elements))
 }
 
+// TupleLiteral is `#(a, b, ...)`. It can have zero, one, or more elements.
+type TupleLiteral struct {
+	Token    lexer.Token
+	Elements []Expression
+}
+
+func (t *TupleLiteral) TokenLiteral() string { return t.Token.Literal }
+func (t *TupleLiteral) Pos() lexer.Position  { return t.Token.Position }
+func (t *TupleLiteral) expr()                {}
+func (t *TupleLiteral) String() string {
+	return fmt.Sprintf("TupleLiteral (%s)", sliceToString(t.Elements))
+}
+
+// TupleAccessExpr is `t.0`. Index is an integer literal, so the checker can reject an
+// index that is out of range at compile time.
+type TupleAccessExpr struct {
+	Token     lexer.Token
+	Container Expression
+	Index     int
+}
+
+func (t *TupleAccessExpr) TokenLiteral() string { return t.Token.Literal }
+func (t *TupleAccessExpr) Pos() lexer.Position  { return startPos(t.Container, t.Token) }
+func (t *TupleAccessExpr) expr()                {}
+func (t *TupleAccessExpr) String() string {
+	return fmt.Sprintf("TupleAccessExpr(%s, %d)", pointerToString(t.Container), t.Index)
+}
+
 type BlockExpr struct {
 	Token      lexer.Token
 	Statements []Statement
@@ -441,6 +469,20 @@ func (s *SliceType) Pos() lexer.Position  { return s.Token.Position }
 func (s *SliceType) typ()                 {}
 func (s *SliceType) String() string {
 	return fmt.Sprintf("SliceType (%s)", pointerToString(s.ElementType))
+}
+
+// TupleType is `(A, B, ...)` in a type position. `()` is the empty tuple type and
+// `(A)` is a tuple type with one element. Types have no grouping parentheses.
+type TupleType struct {
+	Token        lexer.Token
+	ElementTypes []Type
+}
+
+func (t *TupleType) TokenLiteral() string { return t.Token.Literal }
+func (t *TupleType) Pos() lexer.Position  { return t.Token.Position }
+func (t *TupleType) typ()                 {}
+func (t *TupleType) String() string {
+	return fmt.Sprintf("TupleType (%s)", sliceToString(t.ElementTypes))
 }
 
 type NotExpr struct {

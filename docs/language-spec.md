@@ -223,8 +223,24 @@ type Action enum {
 - `Result` and `Maybe` are built-in enums with special support in the checker (§8).
 
 ### 3.6 Tuples
-Tuples are fixed-size, immutable, and may hold different types. The type syntax (`(A, B)` or
-`tuple[A, B]`), element access, and destructuring are **[open]**. They are **[not implemented]**.
+Tuples are fixed-size and immutable. The elements can have different types.
+```solr
+var e = #();                       // empty
+var one = #(1);                    // one element
+var t: (int, str) = #(1, "hello"); // type syntax is (A, B)
+var n = #(2, #(1, 2));             // nested
+```
+- A tuple literal starts with the `#(` token. `#` alone is a lexer error.
+- In a type position, `(A, B)` is a tuple type. `()` is the empty tuple type and `(A)` is a
+  tuple type with one element. Types have no grouping parentheses.
+- The parser accepts tuple literals and tuple types. Type checking is **[not implemented]**.
+- Element access uses a dot and an integer literal: `t.0`, `t.1`. Nested access is `t.1.0`.
+  The index is always a literal, so the checker can reject an index that is out of range.
+  There is no subscript access (`t[0]`) for tuples.
+- After a `.`, the lexer reads digits as an `INT`, never as a float. Thus `t.0.1` lexes as
+  `t . 0 . 1`.
+- A tuple index is a decimal literal with no leading zeros. `t.01` is a parse error.
+- Destructuring is **[open]**.
 
 ### 3.7 Interfaces
 ```solr
@@ -1278,10 +1294,8 @@ current behavior is noted for each one, so a program doesn't depend on it by acc
   followed by `_000`.
 
 **Tuples**
-- Type syntax (`(A, B)` or `tuple[A, B]`), element access (`t.0` or destructuring only),
-  one-element tuples, destructuring in `var`, assignment, and `for`.
-- **Lexer caveat for `t.0`:** if element access is written `t.0`, then `t.0.1` lexes as `t`,
-  `.`, and the float `0.1`. The lexer would need to read digits as an integer after a `.`.
+- Destructuring in `var`, assignment, and `for`. The literal syntax, the type syntax, and
+  element access are decided (§3.6).
 - Tuples are required by the language (`Result[(A, B)]`, iterator steps, map entries).
 
 **Characters**

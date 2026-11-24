@@ -1,0 +1,28 @@
+fn main() {
+    // empty
+    var a = #();
+    // with one value
+    var b = #(1);
+    // with multiple values
+    var c = #(1, "a", 2.5);
+    // nested
+    var d = #(2, #(1, 2));
+    // as type
+    var t: (int, str) = #(1, "hello");
+    var e: () = #();
+    var f: (int) = #(1);
+    var g: ((int, str), []float64)? = Some(#(#(1, "x"), [1.5]));
+    var h: fn((int, int)) -> (int, str)! = fn(p: (int, int)) -> (int, str)!: Ok(#(1, "a"));
+    var i = #(1, 2,);
+    var j = f(#(1 + 2, x.y), #());
+}
+
+fn access() {
+    var a = myTuple.0;
+    var b = nested.1.0;
+    var c = t.0.1.2;
+    var d = s.items.0.name;
+    var e = #(1, 2.5).1;
+    var f = g().0 + 2.5;
+    var h = t.10;
+}
