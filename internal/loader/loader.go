@@ -3,8 +3,8 @@ package loader
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
+	"path"
 	"stellar/internal/ast"
 	"stellar/internal/lexer"
 	"stellar/internal/parser"
@@ -20,28 +20,27 @@ type Module struct {
 }
 
 type Loader struct {
-	Roots  []string
+	Roots  []fs.FS
 	byFile map[string]*Module
 	open   map[string]bool
 	Order  []*Module
 	Errors []string
 }
 
-func (l *Loader) find(path []string) (string, error) {
-	rel := filepath.Join(path...) + ".solr"
+func (l *Loader) find(p []string) (fs.FS, string, error) {
+	rel := path.Join(p...) + ".solr"
 	for _, root := range l.Roots {
-		f := filepath.Join(root, rel)
-		if _, err := os.Stat(f); err == nil {
-			return f, nil
+		if _, err := fs.Stat(root, rel); err == nil {
+			return root, rel, nil
 		}
 	}
-	return "", fmt.Errorf(
+	return nil, "", fmt.Errorf(
 		"module `%s` not found",
-		strings.Join(path, "::"),
+		strings.Join(p, "::"),
 	)
 }
 
-func (l *Loader) Load(file string, path []string) (*Module, error) {
+func (l *Loader) Load(fsys fs.FS, file string, path []string) (*Module, error) {
 	if m, ok := l.byFile[file]; ok {
 		return m, nil
 	}
@@ -53,7 +52,7 @@ func (l *Loader) Load(file string, path []string) (*Module, error) {
 	l.open[file] = true
 	defer delete(l.open, file)
 
-	prog, err := parseFile(file)
+	prog, err := parseFile(fsys, file)
 	if err != nil {
 		return nil, err
 	}
@@ -68,9 +67,9 @@ func (l *Loader) Load(file string, path []string) (*Module, error) {
 			continue
 		}
 		ip := names(imp.Path)
-		f, err := l.find(ip)
+		depFS, f, err := l.find(ip)
 		if err == nil {
-			if dep, err := l.Load(f, ip); err == nil {
+			if dep, err := l.Load(depFS, f, ip); err == nil {
 				m.Imports[strings.Join(ip, "::")] = dep
 				continue
 			}
@@ -92,8 +91,8 @@ func names(tokens []lexer.Token) []string {
 	return out
 }
 
-func parseFile(path string) (*ast.Program, error) {
-	content, err := os.ReadFile(path)
+func parseFile(fsys fs.FS, file string) (*ast.Program, error) {
+	content, err := fs.ReadFile(fsys, file)
 	if err != nil {
 		return nil, err
 	}
@@ -105,19 +104,19 @@ func parseFile(path string) (*ast.Program, error) {
 		for _, e := range lexerErrors {
 			fmt.Println(e.Message)
 		}
-		return nil, fmt.Errorf("lexer errors in `%s`", path)
+		return nil, fmt.Errorf("lexer errors in `%s`", file)
 	}
 
 	p := parser.NewParser(tokens)
 	program := p.Parse()
 	if p.HasErrors() {
 		p.PrintErrors()
-		return nil, fmt.Errorf("parser errors in `%s`", path)
+		return nil, fmt.Errorf("parser errors in `%s`", file)
 	}
 	return program, nil
 }
 
-func New(roots ...string) *Loader {
+func New(roots ...fs.FS) *Loader {
 	return &Loader{
 		Roots:  roots,
 		byFile: map[string]*Module{},

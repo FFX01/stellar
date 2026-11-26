@@ -1,0 +1,3 @@
+pub type Stringable interface {
+    fn string(self) -> str
+}
