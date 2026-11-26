@@ -19,8 +19,10 @@ const (
 	OpSub                 // -
 	OpMul                 // *
 	OpDiv                 // /
-	OpEq                  // ==
-	OpLt                  // <
+	OpMod
+	OpEq // ==
+	OpNeq
+	OpLt // <
 	OpLte
 	OpGt
 	OpGtE
@@ -33,13 +35,33 @@ var stringToBinaryOp = map[string]BinaryOp{
 	"-":   OpSub,
 	"*":   OpMul,
 	"/":   OpDiv,
+	"%":   OpMod,
 	"==":  OpEq,
+	"!=":  OpNeq,
 	"<":   OpLt,
 	"<=":  OpLte,
 	">":   OpGt,
 	">=":  OpGtE,
 	"and": OpAnd,
 	"or":  OpOr,
+}
+
+type AssignOp int
+
+const (
+	OpAddEq AssignOp = iota
+	OpSubEq
+	OpMulEq
+	OpDivEq
+	OpModEq
+)
+
+var stringToAssignOp = map[string]AssignOp{
+	"+=": OpAddEq,
+	"-=": OpSubEq,
+	"*=": OpMulEq,
+	"/=": OpDivEq,
+	"%=": OpModEq,
 }
 
 type UnaryOp int
@@ -162,12 +184,24 @@ type Symbol struct {
 	DataC        int
 }
 
+type ScopeKind int
+
+const (
+	SCKUniverse ScopeKind = iota
+	SCKPrelude
+	SCKPackage
+	SCKType
+	SCKFunc
+	SCKBlock
+)
+
 type ScopeID int
 
 const NoScope ScopeID = -1
 
 type Scope struct {
 	ID      ScopeID
+	Kind    ScopeKind
 	Parent  ScopeID
 	Symbols map[StringID]SymbolID
 }
@@ -181,9 +215,9 @@ func (s *Scope) declare(name StringID, sid SymbolID) error {
 }
 
 func newScope(
-	parent ScopeID,
+	parent ScopeID, kind ScopeKind,
 ) *Scope {
-	s := &Scope{Parent: parent}
+	s := &Scope{Parent: parent, Kind: kind}
 	s.Symbols = map[StringID]SymbolID{}
 	return s
 }
@@ -303,6 +337,9 @@ const (
 	EKUnresolved
 	EKInfix
 	EKUnary
+	EKIf
+	EKVarDecl
+	EKAssign
 )
 
 type ExprID int
@@ -339,6 +376,19 @@ type Context struct {
 
 	PreludeModules []*loader.Module
 	UserModules    []*loader.Module
+}
+
+func (c *Context) enclosingTopLevelScope(
+	scope ScopeID,
+) ScopeID {
+	for scope != NoScope {
+		s := c.GetScope(scope)
+		if s.Kind <= SCKPackage {
+			return scope
+		}
+		scope = s.Parent
+	}
+	return NoScope
 }
 
 func (c *Context) lookupIn(
@@ -476,9 +526,9 @@ func NewContext(
 	c.Strings = newStringInterner()
 	stringInterner = c.Strings
 
-	universeScope := newScope(NoScope)
+	universeScope := newScope(NoScope, SCKUniverse)
 	c.Universe = c.addScope(universeScope)
-	preludeScope := newScope(c.Universe)
+	preludeScope := newScope(c.Universe, SCKPrelude)
 	c.Prelude = c.addScope(preludeScope)
 
 	builtinMod := c.addModule(&Module{
@@ -522,7 +572,7 @@ func (c *Context) collectStructDecl(
 		TargetModule: NoModule,
 	}
 
-	structScope := newScope(scid)
+	structScope := newScope(scid, SCKType)
 	structScopeID := c.addScope(structScope)
 
 	meta := StructMeta{
@@ -564,7 +614,7 @@ func (c *Context) collectInterfaceDecl(
 		TargetModule: NoModule,
 	}
 
-	iScope := newScope(scid)
+	iScope := newScope(scid, SCKType)
 	iScopeID := c.addScope(iScope)
 
 	meta := InterfaceMeta{
@@ -595,7 +645,7 @@ func (c *Context) collectEnumDecl(
 		TargetModule: NoModule,
 	}
 
-	eScope := newScope(scope)
+	eScope := newScope(scope, SCKType)
 	eScopeID := c.addScope(eScope)
 	sym.DataC = int(eScopeID)
 	meta := EnumMeta{
@@ -610,7 +660,7 @@ func (c *Context) collectEnumDecl(
 			Scope:        eScopeID,
 			TargetModule: NoModule,
 		}
-		vScope := newScope(eScopeID)
+		vScope := newScope(eScopeID, SCKType)
 		vScopeID := c.addScope(vScope)
 		sym.DataC = int(vScopeID)
 
@@ -703,7 +753,7 @@ func (c *Context) collectFuncSig(
 		fSym.IsPublic = stmt.IsPublic
 	}
 
-	fScope := newScope(scope)
+	fScope := newScope(scope, SCKFunc)
 	fScopeID := c.addScope(fScope)
 
 	meta := FuncMeta{
@@ -812,7 +862,7 @@ func (c *Context) collectExpr(
 	case *ast.FloatLiteralExpr:
 		expr := Expr{
 			Kind:  EKFloatLit,
-			DataA: int(math.Float64frombits(uint64(t.Value))),
+			DataA: int(math.Float64bits(t.Value)),
 		}
 		return c.addExpr(expr)
 	case *ast.BoolLiteralExpr:
@@ -829,7 +879,7 @@ func (c *Context) collectExpr(
 			return c.addExpr(Expr{
 				Kind:  EKUnresolved,
 				DataA: int(c.Strings.intern(t.Value)),
-				DataB: int(scope),
+				DataB: int(c.enclosingTopLevelScope(scope)),
 			})
 		} else {
 			return c.addExpr(Expr{
@@ -859,11 +909,53 @@ func (c *Context) collectExpr(
 		}
 		expr.DataA = int(c.collectExpr(scope, t.Value))
 		return c.addExpr(expr)
+	case *ast.IfExpr:
+		expr := Expr{
+			Kind: EKIf,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Condition))
+		thenScopeID := c.addScope(newScope(scope, SCKBlock))
+		expr.DataB = int(c.collectExpr(thenScopeID, t.Then))
+		if t.Else != nil {
+			elseScopeID := c.addScope(newScope(scope, SCKBlock))
+			expr.DataC = int(c.collectExpr(elseScopeID, t.Else))
+		}
+		return c.addExpr(expr)
+	case *ast.ExpressionStatement:
+		return c.collectExpr(scope, t.Expression)
+	case *ast.VarStmt:
+		exprID := c.collectExpr(scope, t.Value)
+		sym := Symbol{
+			Name:     c.Strings.intern(t.Name.Literal),
+			Kind:     SKVar,
+			Scope:    scope,
+			IsPublic: t.IsPublic,
+		}
+		sym.DataA = int(c.resolveTypeExpr(scope, t.Type))
+		sym.DataB = int(exprID)
+		sid := c.addSymbol(sym)
+		c.declareIn(scope, sym.Name, sid)
+		expr := Expr{
+			Kind:  EKVarDecl,
+			DataA: int(sid),
+			DataB: int(exprID),
+		}
+		return c.addExpr(expr)
+	case *ast.AssignStmt:
+		targetID := c.collectExpr(scope, t.Target)
+		valueID := c.collectExpr(scope, t.Value)
+		expr := Expr{
+			Kind: EKAssign,
+			Op:   int(stringToAssignOp[t.Token.Literal]),
+		}
+		expr.DataA = int(targetID)
+		expr.DataB = int(valueID)
+		return c.addExpr(expr)
 	case *ast.BlockExpr:
 		expr := Expr{
 			Kind: EKBlock,
 		}
-		exprScopeID := c.addScope(newScope(scope))
+		exprScopeID := c.addScope(newScope(scope, SCKBlock))
 		expr.DataC = int(exprScopeID)
 		var extra []int
 		for _, n := range t.Statements {
@@ -933,7 +1025,7 @@ func (c *Context) collectImplDecl(
 	mod ModID, scope ScopeID, node *ast.ImplDeclStmt,
 ) {
 	target := c.resolveTypeExpr(scope, node.Target)
-	implScope := newScope(scope)
+	implScope := newScope(scope, SCKType)
 	implScopeID := c.addScope(implScope)
 	meta := ImplMeta{
 		TargetType: target,
@@ -1014,7 +1106,7 @@ func (c *Context) collectGroup(
 	mods []*loader.Module, parent ScopeID,
 ) {
 	for _, mod := range mods {
-		modScope := newScope(parent)
+		modScope := newScope(parent, SCKPackage)
 		scid := c.addScope(modScope)
 		name := c.Strings.intern(mod.Name)
 		hirMod := newModule(name, scid)

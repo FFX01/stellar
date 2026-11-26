@@ -2,7 +2,7 @@
 
 > This is the reference for the Stellar language: its syntax, its type system, and its
 > rules for values and bindings. It describes the language as decided on branch
-> `immutability` as of 2026-11-10.
+> `immutability` as of 2026-11-25.
 >
 > **Authority.** Where this document disagrees with `docs/design.md` or
 > `docs/value-semantics.md`, this document wins. Those two files are kept as the record of
@@ -15,7 +15,7 @@
 > | *(no marker)* | Decided. |
 > | **[provisional]** | Used in the reference programs, but not formally agreed. |
 > | **[open]** | An unresolved question. Don't rely on the current wording. |
-> | **[not implemented]** | Decided, but the lexer or parser doesn't handle it yet (§15). |
+> | **[not implemented]** | Decided, but the lexer, the parser, or the checker does not implement it yet (§15). |
 >
 > Source files use the extension `.solr`. Reference programs live in `reference_programs/`.
 
@@ -102,7 +102,7 @@ identifier, so a program can use it as a name.
 | Bool | `true`, `false` | |
 | Sequence | `[1, 2, 3]`, `[]` | Type comes from context or from its elements (§3.3). |
 | Map | `["a": 1]`, `[:]` | **[open]** (a `Map` type is not specified yet). |
-| Tuple | `(1, "a")` | **[open]** syntax (§3.6, §17). |
+| Tuple | `#(1, "a")`, `#()` | Fixed size. The elements can have different types (§3.6). |
 
 String interpolation and format strings are **[open]**.
 
@@ -116,6 +116,7 @@ and  or  !                      logical
 ->  =>  >>                      return type, switch arm, yield
 |  ( )  [ ]  { }                try-binding, grouping
 ...                              spread
+#(                               start of a tuple literal (§3.6)
 ?                                Maybe suffix in types (`T?`)
 ```
 `!` is logical not as a prefix and the result suffix in types (`T!`). `:` is a type
@@ -195,8 +196,10 @@ type Todo struct {
   its zero value. A `Maybe` field may be omitted and is `None()`. A field of any other type
   must be given. Per-field defaults may be added later.
 - **Updated copies:** `todo.with(title="y")` returns a copy with the listed fields replaced.
-  It is the only form. There is no spread in a struct construction: `Todo(...todo, title="y")`
-  is an error.
+  Use `with` for all updates.
+- **Struct spread [open]:** `Todo(...todo, title="y")` is not implemented, and it needs a
+  decision. The parser accepts it, and the checker has no rule for it (§15). It can become a
+  second form of update beside `with` later.
 - Fields are read with `.`: `todo.title`. A field cannot be assigned: `todo.title = "y";` is
   an error. Use `with` to make an updated value (§5.3).
 
@@ -299,7 +302,7 @@ fn max[T: Comparable](a: T, b: T) -> T: if b.lt(a) { >> a; } else b;
 - **Compilation:** each set of type arguments gets its own compiled copy of the function
   (monomorphization). A recursive generic function that needs an endless number of copies
   (`fn f[T](x: T) -> int: f([x]);`) is an error.
-- Checking generic code is **[not implemented]** in the checker's first version.
+- Checking generic code is **[not implemented]** (§15.2).
 
 ### 3.9 Function types
 `fn(int, str) -> bool` is the type of a function taking an `int` and a `str` and returning a
@@ -962,7 +965,8 @@ sig          = ident '(' list(param) ')' [ '->' type ] ;
 type         = typeAtom [ '!' | '?' ] ;
 typeAtom     = ident { '.' ident } [ '[' list(type) ']' ]
              | '[' ']' typeAtom
-             | 'fn' '(' list([ ident ':' ] type) ')' [ '->' type ] ;
+             | 'fn' '(' list([ ident ':' ] type) ')' [ '->' type ]
+             | '(' list(type) ')' ;                  (* a tuple type *)
 
 block        = '{' { stmt } '}' ;
 stmt         = 'var' ident [ ':' type ] '=' expr ';'
@@ -975,6 +979,7 @@ assignOp     = '=' | '+=' | '-=' | '*=' | '/=' | '%=' ;
 
 expr         = prefix { infix } ;
 prefix       = literal | ident | '(' expr ')' | '[' list(expr | '...' expr) ']'
+             | '#(' list(expr) ')'
              | '-' expr | '!' expr
              | 'try' expr [ 'else' [ '|' ident '|' ] ( block | expr ) ]
              | 'must' expr
@@ -988,7 +993,8 @@ arm          = expr [ 'as' ident ] '=>' ( block | expr ) ;
 infix        = binop expr
              | '(' list(arg) ')'
              | '[' [ expr ] [ ':' [ expr ] ] ']'
-             | '.' ident ;
+             | '.' ident
+             | '.' int ;                            (* a tuple element, no leading zeros *)
 arg          = [ ident '=' ] expr | '...' expr ;
 binop        = 'or' | 'and' | '==' | '!=' | '<' | '<=' | '>' | '>='
              | '+' | '-' | '*' | '/' | '%' ;
@@ -996,14 +1002,15 @@ binop        = 'or' | 'and' | '==' | '!=' | '<' | '<=' | '>' | '>='
 
 The grammar above is the **target** language. In `type`, the suffix `!` or `?` applies to the
 whole type before it: `[]int!` is a `Result` of `[]int`, not a slice of results. The lexer and
-parser differ from the grammar in the ways listed in §15.
+parser differ from the grammar in the ways listed in §15.3.
 
 ---
 
 ## 14. Example programs
 
 The examples are checked: each one parses as written with the current parser. The block in
-§5.6 shows programs that are rejected. It parses, and the checker reports its errors.
+§5.6 shows programs that are rejected. It parses, and the checker must report its errors
+(§15.2).
 
 ### 14.1 Values and rebinding
 ```solr
@@ -1203,22 +1210,115 @@ that the loop rebinds.
 
 ## 15. Implementation status
 
-The lexer and parser are ahead of the checker, which is being built (`internal/analyzer`).
-As of 2026-10-28 they implement everything in this document except the items below.
+This section gives the status on 2026-11-25. The lexer and parser are ahead of the checker.
 
+### 15.1 Checkers
+`internal/hir2` is the canonical checker. `internal/hir` and `internal/analyzer` are
+deprecated. `cmd/compile` still uses `internal/hir`.
+
+`internal/hir2` does only the first pass:
+- It collects the declarations of each module into scopes: types, struct fields, enum
+  variants and their fields, interface methods, aliases, functions with their type
+  parameters, bounds, and parameters, top-level constants, `impl` blocks, and imports.
+- The universe scope holds the built-in types `int`, `str`, `float`, `bool`, `Result`,
+  `Maybe`, `void`, and `Self`.
+- The prelude module `lib/prelude/main.solr` declares `Stringable`. Each user module can see
+  the public names of the prelude.
+- In a function body, it records literals, names, unary and binary operators, `if`, and
+  blocks. It records each name as resolved or unresolved. It does not record statements.
+- It records type expressions by name. It does not resolve them to types.
+- It reports no errors. A name that is declared two times in one scope stops the checker
+  with a Go panic.
+
+### 15.2 Rules that the checker does not enforce
+`internal/hir2` enforces no rule of this document yet. It must enforce all the rules below.
+
+**Names and scopes**
+- Built-in names cannot be redeclared or shadowed (§2.2).
+- Type names are `PascalCase` **[provisional]** (§2.2, §3.2).
+- A name is declared one time in each scope. The parameters and the top level of the body
+  are one scope. The same rule applies to loop bindings, `as` bindings, and the error binding
+  of `try … else |err|` (§4.4, §6.10, §6.11). Now a second declaration is a panic.
+- A name is visible only after its initializer (§4.4).
+- A name that does not resolve is an error.
+
+**Types**
+- Resolution of type expressions, and type equality (§3.10).
+- `void` cannot be stored or passed (§3.1).
+- `type UserID int` is an error (§3.2).
+- Struct construction: only named arguments, omitted fields, and zero values. A constructor
+  is not a value (§3.4).
+- Enum variant construction. A variant with fields is not a value (§3.5).
+- Tuple types, and a tuple index that is out of range (§3.6).
+- Structural interface satisfaction. `Self` is replaced by the type that implements the
+  interface (§3.7).
+- `Self` is permitted only in an `impl` block or an interface (§3.7).
+- Generics (§3.8):
+  - User types and interface methods cannot have type parameters.
+  - Each type parameter must occur in the type of a parameter.
+  - Type arguments are inferred at each call.
+  - A generic body can use only the methods of the bound.
+  - A type argument must satisfy its bound.
+  - Recursion that needs an endless number of copies is an error.
+
+**Declarations**
+- Parameter types and return types are required (§4.2).
+- A missing return is an error, and `return 1;` in a `void` function is an error (§4.2).
+- `self` is permitted only as the first parameter of a method, without a type (§4.3).
+- The target of `impl` is a concrete struct or enum. It cannot be a built-in type (§4.3).
+- A method and a field with the same name on one type are an error **[provisional]** (§4.3).
+- An initializer must agree with its annotation (§4.4).
+- Constants: the type, an initializer that is constant, the declaration order, evaluation by
+  the compiler, division by zero, and overflow (§4.6).
+
+**Values and bindings**
+- Parameters, constants, `for` bindings, `as` bindings, and parent variables in a closure
+  cannot be rebound (§5.1).
+- Only a variable can be the target of an assignment (§5.1, §7.2).
+- `mut` is an error (§15.4).
+- A closure reads a copy of the variables of its parent (§5.4).
+
+**Expressions and statements**
+- Call arguments: the order, the names, and one value for each parameter (§6.3).
+- Member access to fields, methods, and enum variants (§6.4).
+- The operands of index and slice expressions. An element cannot be assigned (§6.7).
+- The rules for `>>`, and the `void` type of a block without `>>` (§6.8).
+- `if`: a `bool` condition, the branch types, and branches that leave (§6.9).
+- `switch` (§6.10):
+  - The type of the subject, and cases that are constants.
+  - Qualified enum cases, `_` as the last arm, and duplicate cases.
+  - Exhaustiveness.
+  - The type of an `as` binding, and `as` in a `switch` without a subject.
+  - The arm types.
+- `for`: the operand of the loop, immutable bindings, comprehensions, and loops that never
+  finish (§6.11).
+- The permitted expression statements, and unreachable code (§7.2).
+
+**Errors and absence**
+- The types of `Ok`, `Err`, `Some`, and `None`. The value of `Err` implements `Error` (§8.1,
+  §8.2).
+- `try` is permitted only in a function that returns a `Result`. The `else` block yields a
+  value or leaves (§8.3).
+- `must` on a value that is not a `Result` or a `Maybe` is an error (§8.4).
+
+**Operators, built-in names, and modules**
+- The operator types, `==` on different types, and enum and struct comparison (§9.1).
+- Conversions (§9.3).
+- Built-in functions and methods, and `with` (§10).
+- A name that is not `pub` is private to its module (§11).
+
+### 15.3 Lexer and parser
 **Not implemented:**
 
 | Feature | Status |
 |---|---|
-| Tuples, fixed arrays `[N]T`, map literals | See §3.6, §3.3, §2.4, and §17. |
+| Fixed arrays `[N]T`, map literals | See §3.3, §2.4, and §17. |
 | Other integer bases, `_` in numbers, `'` characters, non-ASCII source | See §17. |
 | `actor fn` | `actor` is an ordinary identifier. There is no keyword and no parse rule. |
 | `is` in `switch` arms | **[open]** as a feature. |
-| Type-parameter bounds (`[T: Comparable]`) | `TypeParameter` has no bound field, so `[T: X]` is a parse error. |
-| `Self` | The parser reads `Self` as an ordinary type name. The checker doesn't resolve it yet. |
 
-**The parser accepts more than the grammar, or parses it differently.** The checker, or a later
-parser change, must reject or fix these:
+**The parser accepts more than the grammar, or parses it differently.** The checker, or a
+later change to the parser, must reject or correct these:
 
 | Input | Behavior now | Spec |
 |---|---|---|
@@ -1228,21 +1328,24 @@ parser change, must reject or fix these:
 | `fn f(x) {}` | a parameter with no type is accepted | types are required (§4.2) |
 | `pub impl A {}`, `pub import a;`, `pub var x = 1;` inside a function | accepted | `pub` applies to `fn`, `type`, and top-level `var` (§11) |
 | `type Pair[A, B] struct {}`, `type I interface { fn f[T]() }`, `impl Pair[A, B] {}` | type parameters and type arguments are accepted | only functions and methods can be generic (§3.8) |
+| `type UserID int` | accepted | an error (§3.2) |
+| `Todo(...todo, title="y")` | `...` is accepted in all call arguments | struct spread is **[open]** (§3.4) |
 | `s.f = v;`, `xs[i] = v;` | any expression is accepted as an assignment target | only a variable (§7.2) |
 | `1 + 2;` as a statement | accepted | expression statements are calls, `if`, `for`, `switch`, blocks, and `try`/`must` of a call (§7.2) |
 
-**Enforced by the checker, not the parser.** The rules in this document that are written as an
-error: types and conversions, rebinding (§5.1), field and element assignment, `_` last in a
-`switch`, enum coverage, the `PascalCase` convention, and so on.
+### 15.4 Removed from the language
+`mut` declarations and the `@` copy operator were removed on 2026-11-10 (§5).
+- `@`: the lexer rejects it ("Unexpected character"). `ast.CopyExpr` and `parseCopyExpr`
+  remain, but no source text can reach them.
+- `mut`: it is still a keyword. The parser reads `mut x = e;` as an `ast.VarStmt` with `IsMut`
+  set. The checker must reject it.
 
-**Removed from the language, still in the lexer or parser:** `mut` declarations and the `@`
-copy operator (`CopyExpr`) were removed on 2026-11-10 (§5). Until the lexer and parser drop
-them, the checker rejects them.
-
-**Changes in the current lexer and parser, for reference:** `T?`; `Some` and `None`; `...` in
-sequence literals and call arguments; `!=` after a type read as `!` then `=`; `try` at the unary
-level; expression-bodied `impl` methods ending in `;`; string escapes decoded in the lexer, with
-lexer errors reported separately from parse errors.
+### 15.5 Changes in the current lexer and parser
+For reference: `T?`; `Some` and `None`; `...` in sequence literals and call arguments; `!=`
+after a type read as `!` then `=`; `try` at the unary level; expression-bodied `impl` methods
+ending in `;`; string escapes decoded in the lexer, with lexer errors reported separately from
+parse errors; tuple literals `#(…)`, tuple types `(A, B)`, and tuple access `t.0`; `@` removed
+from the lexer.
 
 ---
 
@@ -1254,11 +1357,12 @@ Consolidated from the markers above.
 - Do omitted struct fields follow §3.4? Will per-field defaults be added?
 - Field and element assignment as short forms of a rebind: `s.f = v` for `s = s.with(f=v)`,
   and `xs[i] = v` for `xs = xs.replace(i, v)` (§5.3).
+- Struct spread `T(...x, f=v)` as a second form of update beside `with` (§3.4).
 - Sorting with a comparison function, and `pop` (§10.2).
 - A `ref` type for shared mutable state, if ever.
 
 **Types**
-- Tuple syntax, element access, destructuring.
+- Tuple destructuring (§3.6).
 - `Maybe` vs `Result`: which absences are which?
 - Several bounds on one type parameter (§3.8).
 - Built-in interfaces: `Comparable` for `==` and ordering on structs and enums (§9.1), and
