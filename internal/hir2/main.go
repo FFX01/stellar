@@ -73,6 +73,8 @@ const (
 
 type StringID int
 
+const InvalidStringID StringID = -1
+
 func (sid StringID) LitterDump(w io.Writer) {
 	w.Write([]byte(": " + stringInterner.Get(sid)))
 }
@@ -340,6 +342,21 @@ const (
 	EKIf
 	EKVarDecl
 	EKAssign
+	EKReturn
+	EKYield
+	EKBreak
+	EKContinue
+	EKCall
+	EKMember
+	EKSubscript
+	EKSliceRange
+	EKTupleAccess
+	EKSpread
+	EKSwitch
+	EKForIn
+	EKLoop
+	EKFunc
+	EKTry
 )
 
 type ExprID int
@@ -734,6 +751,37 @@ func (c *Context) collectFuncStmt(
 	return sid
 }
 
+func (c *Context) collectParams(
+	mod ModID, scope ScopeID, params []*ast.Parameter,
+) []SymbolID {
+	var out []SymbolID
+	for _, p := range params {
+		pName := c.Strings.intern(p.Name)
+		sym := Symbol{
+			Name:         pName,
+			Kind:         SKParam,
+			Scope:        scope,
+			Module:       mod,
+			TargetModule: NoModule,
+		}
+		if p.Name == "self" && p.Type == nil {
+			texpr := TypeExpr{
+				Kind:  TEKSelf,
+				DataA: int(c.Strings.intern("Self")),
+				DataB: int(scope),
+			}
+			teid := c.addTypeExpr(texpr)
+			sym.DataA = int(teid)
+		} else {
+			sym.DataA = int(c.resolveTypeExpr(scope, p.Type))
+		}
+		sid := c.addSymbol(sym)
+		c.declareIn(scope, pName, sid)
+		out = append(out, sid)
+	}
+	return out
+}
+
 func (c *Context) collectFuncSig(
 	mod ModID, scope ScopeID, stmt *ast.FunctionStmt, sig *ast.FunctionSignature,
 ) SymbolID {
@@ -789,30 +837,7 @@ func (c *Context) collectFuncSig(
 		}
 	}
 
-	for _, p := range sig.Parameters {
-		pName := c.Strings.intern(p.Name)
-		sym := Symbol{
-			Name:         pName,
-			Kind:         SKParam,
-			Scope:        fScopeID,
-			Module:       mod,
-			TargetModule: NoModule,
-		}
-		if p.Name == "self" && p.Type == nil {
-			texpr := TypeExpr{
-				Kind:  TEKSelf,
-				DataA: int(c.Strings.intern("Self")),
-				DataB: int(fScopeID),
-			}
-			teid := c.addTypeExpr(texpr)
-			sym.DataA = int(teid)
-		} else {
-			sym.DataA = int(c.resolveTypeExpr(scope, p.Type))
-		}
-		sid := c.addSymbol(sym)
-		c.declareIn(fScopeID, pName, sid)
-		meta.Params = append(meta.Params, sid)
-	}
+	meta.Params = c.collectParams(mod, fScopeID, sig.Parameters)
 
 	fSym.DataA = int(c.addFuncMeta(meta))
 
@@ -871,6 +896,170 @@ func (c *Context) collectExpr(
 		}
 		if t.Value {
 			expr.DataA = 1
+		}
+		return c.addExpr(expr)
+	case *ast.SequenceLiteral:
+		expr := Expr{
+			Kind: EKSliceLit,
+		}
+		var extra []int
+		for _, expr := range t.Elements {
+			exprID := c.collectExpr(scope, expr)
+			extra = append(extra, int(exprID))
+		}
+		expr.DataA, expr.DataB = c.addExtra(extra)
+		return c.addExpr(expr)
+	case *ast.TupleLiteral:
+		expr := Expr{
+			Kind: EKTupleLit,
+		}
+		var extra []int
+		for _, el := range t.Elements {
+			exprID := c.collectExpr(scope, el)
+			extra = append(extra, int(exprID))
+		}
+		expr.DataA, expr.DataB = c.addExtra(extra)
+		return c.addExpr(expr)
+	case *ast.SpreadExpr:
+		expr := Expr{
+			Kind: EKSpread,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Value))
+		return c.addExpr(expr)
+	case *ast.SwitchExpr:
+		expr := Expr{
+			Kind:  EKSwitch,
+			DataA: -1,
+			DataB: -1,
+			DataC: -1,
+		}
+		if t.Subject != nil {
+			expr.DataC = int(c.collectExpr(scope, t.Subject))
+		}
+		var extra []int
+		for _, arm := range t.Arms {
+			armScopeID := c.addScope(newScope(scope, SCKBlock))
+			patternExprID := -1
+			bindingSymbolID := -1
+			bodyExprID := -1
+			if arm.Case != nil {
+				patternExprID = int(c.collectExpr(scope, arm.Case))
+			}
+			if arm.Binding != nil {
+				name := c.Strings.intern(arm.Binding.Value)
+				sid := c.addSymbol(Symbol{
+					Name:         name,
+					Kind:         SKVar,
+					Scope:        armScopeID,
+					Module:       NoModule,
+					TargetModule: NoModule,
+				})
+				c.declareIn(armScopeID, name, sid)
+				bindingSymbolID = int(sid)
+			}
+			if arm.Value != nil {
+				bodyExprID = int(c.collectExpr(armScopeID, arm.Value))
+			}
+			extra = append(
+				extra,
+				int(armScopeID),
+				patternExprID,
+				bindingSymbolID,
+				bodyExprID,
+			)
+		}
+		expr.DataA, expr.DataB = c.addExtra(extra)
+		return c.addExpr(expr)
+	case *ast.ForInExpr:
+		expr := Expr{
+			Kind: EKForIn,
+		}
+		loopScopeID := c.addScope(newScope(scope, SCKBlock))
+		expr.DataC = int(loopScopeID)
+		idxSid := NoSymbol
+		valSid := NoSymbol
+		if t.IndexBinding.Literal != "_" {
+			name := c.Strings.intern(t.IndexBinding.Literal)
+			sid := c.addSymbol(Symbol{
+				Name:         name,
+				Kind:         SKVar,
+				Scope:        loopScopeID,
+				Module:       NoModule,
+				TargetModule: NoModule,
+			})
+			c.declareIn(loopScopeID, name, sid)
+			idxSid = sid
+		}
+		if t.ValueBinding.Literal != "_" {
+			name := c.Strings.intern(t.ValueBinding.Literal)
+			sid := c.addSymbol(Symbol{
+				Name:         name,
+				Kind:         SKVar,
+				Scope:        loopScopeID,
+				Module:       NoModule,
+				TargetModule: NoModule,
+			})
+			c.declareIn(loopScopeID, name, sid)
+			valSid = sid
+		}
+		bodyExprID := c.collectExpr(loopScopeID, t.Body)
+		extra := []int{int(idxSid), int(valSid), int(bodyExprID)}
+		expr.DataA, expr.DataB = c.addExtra(extra)
+		return c.addExpr(expr)
+	case *ast.ForWhileExpr:
+		expr := Expr{
+			Kind:  EKLoop,
+			DataA: int(InvalidExprID),
+			DataB: int(InvalidExprID),
+		}
+		if t.Condition != nil {
+			expr.DataA = int(c.collectExpr(scope, t.Condition))
+		}
+		if t.Body != nil {
+			expr.DataB = int(c.collectExpr(scope, t.Body))
+		}
+		return c.addExpr(expr)
+	case *ast.FunctionExpr:
+		expr := Expr{
+			Kind: EKFunc,
+		}
+		fScopeID := c.addScope(newScope(scope, SCKFunc))
+		meta := FuncMeta{
+			BodyScope: fScopeID,
+		}
+		if t.Signature.ReturnType != nil {
+			meta.ReturnType = c.resolveTypeExpr(scope, t.Signature.ReturnType)
+		} else {
+			void := TypeExpr{
+				Kind:  TEKNamed,
+				DataA: int(c.Strings.intern("void")),
+				DataB: int(scope),
+			}
+			meta.ReturnType = c.addTypeExpr(void)
+		}
+		meta.Params = c.collectParams(NoModule, fScopeID, t.Signature.Parameters)
+		expr.DataA = int(c.addFuncMeta(meta))
+		return c.addExpr(expr)
+	case *ast.TryExpr:
+		expr := Expr{
+			Kind: EKTry,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Value))
+		if t.ElseValue != nil {
+			elseScopeID := c.addScope(newScope(scope, SCKBlock))
+			if t.ErrName != "" {
+				sym := Symbol{
+					Name:         c.Strings.intern(t.ErrName),
+					Kind:         SKVar,
+					Scope:        elseScopeID,
+					Module:       -1,
+					TargetModule: -1,
+				}
+				sid := c.addSymbol(sym)
+				c.declareIn(elseScopeID, sym.Name, sid)
+				expr.DataC = int(sid)
+			}
+			expr.DataB = int(c.collectExpr(elseScopeID, t.ElseValue))
 		}
 		return c.addExpr(expr)
 	case *ast.IdentifierExpr:
@@ -950,6 +1139,82 @@ func (c *Context) collectExpr(
 		}
 		expr.DataA = int(targetID)
 		expr.DataB = int(valueID)
+		return c.addExpr(expr)
+	case *ast.ReturnStmt:
+		expr := Expr{
+			Kind: EKReturn,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Value))
+		return c.addExpr(expr)
+	case *ast.EmitStmt:
+		expr := Expr{
+			Kind: EKYield,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Value))
+		return c.addExpr(expr)
+	case *ast.BreakStmt:
+		expr := Expr{
+			Kind: EKBreak,
+		}
+		return c.addExpr(expr)
+	case *ast.ContinueStmt:
+		expr := Expr{
+			Kind: EKContinue,
+		}
+		return c.addExpr(expr)
+	case *ast.MemberExpr:
+		expr := Expr{
+			Kind: EKMember,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Container))
+		expr.DataB = int(c.Strings.intern(t.Member))
+		return c.addExpr(expr)
+	case *ast.SubscriptExpr:
+		expr := Expr{
+			Kind: EKSubscript,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Receiver))
+		expr.DataB = int(c.collectExpr(scope, t.Argument))
+		return c.addExpr(expr)
+	case *ast.SliceExpr:
+		expr := Expr{
+			Kind:  EKSliceRange,
+			DataA: -1,
+			DataB: -1,
+		}
+		if t.Start != nil {
+			expr.DataA = int(c.collectExpr(scope, t.Start))
+		}
+		if t.End != nil {
+			expr.DataB = int(c.collectExpr(scope, t.End))
+		}
+		return c.addExpr(expr)
+	case *ast.TupleAccessExpr:
+		expr := Expr{
+			Kind: EKTupleAccess,
+		}
+		expr.DataA = int(c.collectExpr(scope, t.Container))
+		expr.DataB = t.Index
+		return c.addExpr(expr)
+	case *ast.CallExpr:
+		expr := Expr{
+			Kind: EKCall,
+		}
+		expr.DataC = int(c.collectExpr(scope, t.Left))
+		var extra []int
+		seenName := false
+		for _, arg := range t.Args {
+			nameID := InvalidStringID
+			if arg.Name != "" {
+				seenName = true
+				nameID = c.Strings.intern(arg.Name)
+			} else if seenName {
+				panic("positional arg after named arg")
+			}
+			argExprID := c.collectExpr(scope, arg.Value)
+			extra = append(extra, int(nameID), int(argExprID))
+		}
+		expr.DataA, expr.DataB = c.addExtra(extra)
 		return c.addExpr(expr)
 	case *ast.BlockExpr:
 		expr := Expr{
